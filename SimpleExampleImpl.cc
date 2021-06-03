@@ -45,8 +45,6 @@
 #include <Zoltan2_XpetraCrsMatrixAdapter.hpp>
 #include <Zoltan2_XpetraMultiVectorAdapter.hpp>
 #include <iostream>
-// Timer for use in example().
-Teuchos::RCP<Teuchos::Time> exportTimer;
 
 template<class CrsMatrixType>
 Teuchos::RCP<CrsMatrixType>
@@ -58,6 +56,7 @@ redistributeMatrix (const Teuchos::RCP<const Teuchos::Comm<int> >& comm, Teuchos
 
     typedef Zoltan2::XpetraCrsMatrixAdapter<CrsMatrixType> MatrixAdapter_t;
     Teuchos::RCP<Time> timer = TimeMonitor::getNewCounter ("Sparse matrix redistribution");
+    TimeMonitor monitor (*timer);
 
     Teuchos::ParameterList param;
     param.set("partitioning_approach", "partition");
@@ -185,15 +184,15 @@ main (int argc, char *argv[])
   Tpetra::ScopeGuard tpetraScope (&argc, &argv);
   {
     auto comm = Tpetra::getDefaultComm ();
-    exportTimer =
-      TimeMonitor::getNewCounter ("Sparse matrix redistribution");
+
     const int myRank = comm->getRank ();
     // Make global timer for sparse matrix redistribution.
     // We will use (start and stop) this timer in example().
     example (comm, std::cout); // Run the whole example.
     // This tells the Trilinos test framework that the test passed.
+    TimeMonitor::summarize (std::cout);
+
     if (myRank == 0) {
-        TimeMonitor::summarize (std::cout);
         std::cout << "End Result: TEST PASSED" << std::endl;
     }
   }
