@@ -47,6 +47,32 @@
 #include <iostream>
 
 template<class CrsMatrixType>
+void outputMatrix(const Teuchos::RCP<const Teuchos::Comm<int> >& comm, Teuchos::RCP<CrsMatrixType>& matrix) {
+    using Teuchos::arcp;
+    using Teuchos::ArrayRCP;
+    using Teuchos::ArrayView;
+    using Teuchos::RCP;
+    using Teuchos::rcp;
+    using Teuchos::Time;
+    using Teuchos::TimeMonitor;
+    using Teuchos::tuple;
+    typedef typename CrsMatrixType::scalar_type scalar_type;
+    typedef typename CrsMatrixType::local_ordinal_type LO;
+    typedef typename CrsMatrixType::global_ordinal_type GO;
+    ArrayView<const GO> myGlobalElements = matrix->getRowMap()->getNodeElementList ();
+    auto map = matrix->getRowMap();
+    typedef typename ArrayView<const GO>::const_iterator iter_type;
+    for (iter_type it = myGlobalElements.begin(); it != myGlobalElements.end(); ++it) {
+        const LO i_local = *it;
+        const GO i_global = map->getGlobalElement (i_local);
+        Teuchos::ArrayView<const LO> ixs;
+        Teuchos::ArrayView<const double> vals;
+        matrix->getLocalRowView(i_global, ixs, vals);
+        std::cout << "Rank #" << comm->getRank() << ": Index " << i_global << " has neighbors: " << ixs << std::endl;
+    }
+}
+
+template<class CrsMatrixType>
 Teuchos::RCP<CrsMatrixType>
 redistributeMatrix (const Teuchos::RCP<const Teuchos::Comm<int> >& comm, Teuchos::RCP<const CrsMatrixType>& matrix)
 {
@@ -145,7 +171,7 @@ example (const Teuchos::RCP<const Teuchos::Comm<int> >& comm,
   // The global number of rows in the matrix A to create.  We scale
   // this relative to the number of (MPI) processes, so that no matter
   // how many MPI processes you run, every process will have 10 rows.
-  const GST numGlobalIndices = 100;
+  const GST numGlobalIndices = 21;
   const global_ordinal_type indexBase = 1;
   // Construct a Map that is global (not locally replicated), but puts
   // all the equations on MPI Proc 0.
@@ -174,7 +200,9 @@ example (const Teuchos::RCP<const Teuchos::Comm<int> >& comm,
   if (myRank == 0) {
       out << "Redistribute sparse matrix" << endl;
   }
+  outputMatrix(comm, A);
   RCP<crs_matrix_type> B = redistributeMatrix(comm, A);
+  outputMatrix(comm, B);
 }
 
 int
