@@ -2,6 +2,7 @@
 #include <string>
 #include <iostream>
 #include <metis.h>
+#include <vector>
 
 
 /*
@@ -62,6 +63,10 @@ namespace ExodusIO {
                 char elemtype[MAX_STR_LENGTH+1];
 
                 if (ex_get_ids(fid, EX_ELEM_BLOCK, ids)) return false;
+                int elementsIdx[params.num_elem + 1];
+                std::vector<int> nodesInElements;
+                int elemIdx = 0;
+                int nodeIdx = 0;
 
                 // using the element block parameters read the element block info
                 for (int i=0; i<params.num_elem_blk; i++) {
@@ -74,9 +79,70 @@ namespace ExodusIO {
                         << "\n\t# of Attributes: " << num_attr
                         << "\n\tElement Type: " << elemtype << std::endl;
 
-                        int connect[num_elem_in_block * num_nodes_per_elem];
+                        int *connect = new int[num_elem_in_block * num_nodes_per_elem];
                         ex_get_elem_conn(fid, ids[i], connect);
+                        std::cout << "Block #" << i << ": {";
+                        for (int j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
+                            if (j) std::cout << ",";
+                            if (j % num_nodes_per_elem == 0) { 
+                                std::cout << "[";
+                                elementsIdx[elemIdx++] = nodeIdx;
+                            }
+                            std::cout << connect[j];
+                            nodesInElements.push_back(connect[j]);
+                            nodeIdx++;
+                            if ((j+1) % num_nodes_per_elem == 0) std::cout << "]";
+                        }
+                        std::cout << "}" << std::endl;
+                        delete[] connect;
                 }
+                elementsIdx[elemIdx] = nodeIdx;
+                std::cout << "Indexing: {";
+                for (int i = 0; i < params.num_elem + 1; i++) {
+                    if (i) std::cout << ",";
+                    std::cout << elementsIdx[i];
+                }
+                std::cout << "}" << std::endl;
+                std::cout << "Nodes: {";
+                for (int i = 0; i < nodesInElements.size(); i++) {
+                    if (i) std::cout << ",";
+                    std::cout << nodesInElements[i];
+                }
+                std::cout << "}" << std::endl;
+
+                idx_t ne = params.num_elem;
+                idx_t nn = params.num_nodes;
+                idx_t *eptr = elementsIdx;
+                idx_t *eind = nodesInElements.data();
+                idx_t *vwgt = nullptr;
+                idx_t *vsize = nullptr;
+                idx_t nparts = 2;
+                real_t *tpwgts = nullptr;
+                idx_t *options = nullptr;
+                idx_t objval = 0;
+                idx_t *epart = new int[ne];
+                idx_t *npart = new int[nn];
+                std::cout << "Calling METIS_PartMeshNodal with " << nparts << " partitions." << std::endl;
+                int retval = METIS_PartMeshNodal(&ne, &nn, eptr, eind, vwgt, vsize, &nparts, tpwgts, options, &objval, epart, npart);
+                if (retval != METIS_OK) {
+                    std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR"));
+                    return false;
+                }
+
+                std::cout << "ObjVal = " << objval << std::endl;
+                std::cout << "Element Partition: {";
+                for (int i = 0; i < ne; i++) {
+                    if (i) std::cout << ",";
+                    std::cout << epart[i];
+                }
+                std::cout << "}" << std::endl;
+                std::cout << "Node Partition: {";
+                for (int i = 0; i < nn; i++) {
+                    if (i) std::cout << ",";
+                    std::cout << npart[i];
+                }
+                std::cout << "}" << std::endl;
+
                 return true;
             }
 
