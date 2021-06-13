@@ -116,14 +116,17 @@ namespace ExodusIO {
                 idx_t *eind = nodesInElements.data();
                 idx_t *vwgt = nullptr;
                 idx_t *vsize = nullptr;
-                idx_t nparts = 8;
+                idx_t ncommon = 1;
+                idx_t nparts = 3;
                 real_t *tpwgts = nullptr;
                 idx_t *options = nullptr;
                 idx_t objval = 0;
                 idx_t *epart = new int[ne];
                 idx_t *npart = new int[nn];
+                for (int i = 0; i < ne; i++) epart[i] = 0;
+                for (int i = 0; i < nn; i++) npart[i] = 0;
                 std::cout << "Calling METIS_PartMeshNodal with " << nparts << " partitions." << std::endl;
-                int retval = METIS_PartMeshNodal(&ne, &nn, eptr, eind, vwgt, vsize, &nparts, tpwgts, options, &objval, epart, npart);
+                int retval = METIS_PartMeshDual(&ne, &nn, eptr, eind, vwgt, vsize, &ncommon, &nparts, tpwgts, options, &objval, epart, npart);
                 if (retval != METIS_OK) {
                     std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR"));
                     return false;
