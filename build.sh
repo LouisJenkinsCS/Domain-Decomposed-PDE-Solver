@@ -9,10 +9,10 @@ PARMETIS_LIB=/Users/LouisJenkinsCS/spack/opt/spack/darwin-bigsur-broadwell/apple
 TRILINOS_LIB=/Users/LouisJenkinsCS/spack/opt/spack/darwin-bigsur-broadwell/apple-clang-12.0.5/trilinos-13.0.1-fjd4ka7rh56hi7fnu6m2huhqhz3qzpma/lib/
 NETCDF_LIB=/Users/LouisJenkinsCS/spack/opt/spack/darwin-bigsur-broadwell/apple-clang-12.0.5/netcdf-c-4.8.0-3l5g45insmzgtbxdfk4vr6ynm4vtyvpz/lib/
 EXODUSII_LIB=/Users/LouisJenkinsCS/spack/opt/spack/darwin-bigsur-broadwell/apple-clang-12.0.5/exodusii-2021-04-05-zfmygn6ucn3me4asovbn7oa7gwkiiyee/lib/
-METIS_LIB=/usr/local/Cellar/metis/5.1.0/lib/
+METIS_LIB=/usr/local/lib/
 PARMETIS_LDFLAGS="-lparmetis"
 TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgorithms -lteuchoscore -lteuchoscomm -lteuchosparameterlist -lzoltan2 -lxpetra -lxpetra-sup -lgaleri-xpetra -lgaleri-epetra -ltpetraclassiclinalg -ltpetraclassiclinalg -lzoltan -lteuchoskokkoscomm -lteuchoskokkoscompat -lteuchosnumerics"
-CCFLAGS="-std=c++17 -O3 -g -ggdb3"
+CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address"
 
 # Build Examples
 # mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS Example1.cc -o exec/Example1
@@ -20,4 +20,4 @@ CCFLAGS="-std=c++17 -O3 -g -ggdb3"
 # mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS Example3.cc -o exec/Example3
 # mpic++ -I$TRILINOS_INCLUDE -I$PARMETIS_INCLUDE -L$TRILINOS_LIB -L$PARMETIS_LIB $CCFLAGS $TRILINOS_LDFLAGS $PARMETIS_LDFLAGS Example4.cc -o exec/Example4
 # mpic++ -I$TRILINOS_INCLUDE -I$PARMETIS_INCLUDE -L$TRILINOS_LIB -L$PARMETIS_LIB $CCFLAGS $TRILINOS_LDFLAGS $PARMETIS_LDFLAGS SimpleExampleImpl.cc -o exec/SimpleExampleImpl
-clang++ -I$EXODUSII_INCLUDE -L$EXODUSII_LIB -L$METIS_LIB $CCFLAGS -lexodus -lmetis ExodusIOTest.cpp -o exec/ExodusIOTest
+mpic++ -I$EXODUSII_INCLUDE -L$EXODUSII_LIB -L$METIS_LIB $CCFLAGS -lexodus -lmetis ExodusIOTest.cpp -o exec/ExodusIOTest
