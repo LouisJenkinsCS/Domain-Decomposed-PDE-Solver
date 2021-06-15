@@ -116,8 +116,8 @@ namespace ExodusIO {
                 idx_t *eind = nodesInElements.data();
                 idx_t *vwgt = nullptr;
                 idx_t *vsize = nullptr;
-                idx_t ncommon = 1;
-                idx_t nparts = 3;
+                idx_t ncommon = 3;
+                idx_t nparts = 2;
                 real_t *tpwgts = nullptr;
                 idx_t *options = nullptr;
                 idx_t objval = 0;

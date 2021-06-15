@@ -2,6 +2,6 @@
 
 int main(void) {
     ExodusIO::IO io;
-    io.open("2blocks.exo", true);
+    io.open("data/bolted_bracket.exo", true);
     io.decompose();
 }
