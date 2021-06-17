@@ -2,7 +2,7 @@
 
 int main(void) {
     ExodusIO::IO io;
-    io.open("data/rectangle-tris.exo", true);
+    io.open("data/tet-cube.exo", true);
     io.create("output.exo");
     io.decompose();
 }

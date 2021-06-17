@@ -132,7 +132,7 @@ namespace ExodusIO {
                 if (strncmp(elemtype, "TETRA", 5)) {
                     ncommon = 3;
                 } else if (strncmp(elemtype, "TRI", 3)) {
-                    ncommon = 2;
+                    ncommon = 3;
                 } else {
                     std::cerr << "Currently unsupported element type for mesh: " << elemtype << std::endl;
                 }
@@ -169,7 +169,7 @@ namespace ExodusIO {
                     idx_t part = epart[idx];
                     for (int j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
                         // Check if every node in this block is in the same partition...
-                        if (npart[connect[j]-1] != part) {
+                        if (npart[connect[j]-1] != part && false) {
                             j += num_nodes_per_elem - (j % num_nodes_per_elem) - 1;
                             elembin[nparts].push_back(idx);
                             // Update current partition with next element; check for out-of-bounds
@@ -212,13 +212,19 @@ namespace ExodusIO {
                 ex_put_init(writeFID, params.title, params.num_dim, params.num_nodes, params.num_elem, numparts, params.num_node_sets, params.num_side_sets);
                 
                 // Writes out node coordinations
-                real_t *xs = new real_t[params.num_nodes];
-                real_t *ys = new real_t[params.num_nodes];
-                real_t *zs = NULL;
-                if (params.num_dim >= 3) zs = new real_t[params.num_nodes];
+                real_t xs[params.num_nodes];
+                real_t ys[params.num_nodes];
+                real_t zs[params.num_nodes];
+                // if (params.num_dim >= 3) zs = new real_t[params.num_nodes];
                 ex_get_coord(readFID, xs, ys, zs);
+                std::cout << "Node Coordinates: [";
+                for (int i = 0; i < params.num_nodes; i++) {
+                    if (i) std::cout << ",";
+                    std::cout << "(" << xs[i] << "," << ys[i] << "," << zs[i] << ")";
+                }
                 ex_put_coord(writeFID, xs, ys, zs);
                 // NOTE: Bad Free when trying to delete[] the ys and zs, but not xs... Debug Later!
+                std::cout << "]" << std::endl;
                 // delete[] xs;
                 // delete[] ys;
                 // if (params.num_dim >= 3) delete[] zs;
@@ -245,14 +251,19 @@ namespace ExodusIO {
                 for (int i = 0; i < nparts + 1; i++) {
                     idx_t num_elems_per_block = elembin[i].size();
                     idx_t num_nodes_per_elem = -1;
-                    for (idx_t elemIdx : elembin[i]) {
+                    std::cout << "num_elems_per_block=" << num_elems_per_block << std::endl;
+                    for (int j = 0; j < num_elems_per_block; j++) {
+                        idx_t elemIdx = elembin[i][j];
+                        std::cout << "elemIdx=" << elemIdx << std::endl;
                         num_nodes_per_elem = elementsIdx[elemIdx + 1] - elementsIdx[elemIdx];
+                        std::cout << "num_nodes_per_elem=" << num_nodes_per_elem << std::endl;
                         break;
                     }
                     if (num_nodes_per_elem == -1) {
                         std::cerr << "Was not able to deduce the # of nodes per elem!" << std::endl;
                         continue;
                     }
+
                     // Note: There could be faces and sides per entry!!! Need a more general solution!
                     ex_put_block(writeFID, EX_ELEM_BLOCK, currPart, elemtype, num_elems_per_block, num_nodes_per_elem, 0, 0, 0);
 
