@@ -120,7 +120,7 @@ namespace ExodusIO {
                 idx_t *vwgt = nullptr;
                 idx_t *vsize = nullptr;
                 idx_t ncommon = 1;
-                idx_t nparts = 3;
+                idx_t nparts = 2;
                 real_t *tpwgts = nullptr;
                 idx_t *options = nullptr;
                 idx_t objval = 0;
@@ -168,16 +168,18 @@ namespace ExodusIO {
                     int idx = 0;
                     idx_t part = epart[idx];
                     for (int j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
-                        if (npart[connect[j]-1] != part && npart[connect[j]-1] != -2) {
+                        // Check if every node in this block is in the same partition...
+                        if (npart[connect[j]-1] != part) {
                             j += num_nodes_per_elem - (j % num_nodes_per_elem) - 1;
                             elembin[nparts].push_back(idx);
-                            if (idx < num_elem_in_block) part = epart[idx];
-                            idx++;
+                            // Update current partition with next element; check for out-of-bounds
+                            if (idx + 1 < num_elem_in_block) part = epart[++idx];
                             continue;
                         }
-                        if ((j+1) % num_nodes_per_elem == 0 && idx + 1 < num_elem_in_block) {
+                        if ((j+1) % num_nodes_per_elem == 0) {
                             elembin[part].push_back(idx);
-                            part = epart[++idx];
+                            // Update current partition with next element; check for out-of-bounds
+                            if (idx + 1 < num_elem_in_block) part = epart[++idx];
                         }
                     }
                     delete[] connect;
@@ -193,8 +195,21 @@ namespace ExodusIO {
                     std::cout << "]" << std::endl;
                 }
 
+                idx_t numparts = 0;
+                for (int i = 0; i < nparts + 1; i++) {
+                    idx_t num_elems_per_block = elembin[i].size();
+                    idx_t num_nodes_per_elem = -1;
+                    for (idx_t elemIdx : elembin[i]) {
+                        num_nodes_per_elem = elementsIdx[elemIdx + 1] - elementsIdx[elemIdx];
+                        break;
+                    }
+                    if (num_nodes_per_elem > 0) {
+                        numparts++;
+                    }
+                }
+
                 // Write out new header
-                ex_put_init(writeFID, params.title, params.num_dim, params.num_nodes, params.num_elem, nparts, params.num_node_sets, params.num_side_sets);
+                ex_put_init(writeFID, params.title, params.num_dim, params.num_nodes, params.num_elem, numparts, params.num_node_sets, params.num_side_sets);
                 
                 // Writes out node coordinations
                 real_t *xs = new real_t[params.num_nodes];
@@ -226,6 +241,7 @@ namespace ExodusIO {
                 delete[] elem_map;
 
                 // Write new element blocks
+                int currPart = 0;
                 for (int i = 0; i < nparts + 1; i++) {
                     idx_t num_elems_per_block = elembin[i].size();
                     idx_t num_nodes_per_elem = -1;
@@ -235,20 +251,170 @@ namespace ExodusIO {
                     }
                     if (num_nodes_per_elem == -1) {
                         std::cerr << "Was not able to deduce the # of nodes per elem!" << std::endl;
-                        abort();
+                        continue;
                     }
                     // Note: There could be faces and sides per entry!!! Need a more general solution!
-                    ex_put_block(writeFID, EX_ELEM_BLOCK, i, elemtype, num_elems_per_block, num_nodes_per_elem, 0, 0, 0);
+                    ex_put_block(writeFID, EX_ELEM_BLOCK, currPart, elemtype, num_elems_per_block, num_nodes_per_elem, 0, 0, 0);
 
                     idx_t *connect = new idx_t[num_elems_per_block * num_nodes_per_elem];
                     int idx = 0;
+                    std::cout << "Connectivity for Block #" << currPart << ": [ ";
                     for (idx_t elemIdx : elembin[i]) {
+                        std::cout << "[ ";
                         for (idx_t j = elementsIdx[elemIdx]; j < elementsIdx[elemIdx+1]; j++) {
                             connect[idx++] = nodesInElements[j];
+                            std::cout << nodesInElements[j] << " ";
+                        }
+                        std::cout << "]";
+                    }
+                    std::cout << "]" << std::endl;
+                    if (idx == 0) {
+                        std::cerr << "Connectivity is bad!" << std::endl;
+                    }
+                    ex_put_conn(writeFID, EX_ELEM_BLOCK, currPart++, connect, NULL, NULL);
+                    delete[] connect;
+                }
+
+                ids = new idx_t[params.num_node_sets];
+                ex_get_ids(readFID, EX_NODE_SET, ids);
+                
+                for (int i = 0; i < params.num_node_sets; i++) {
+                    idx_t num_nodes_in_set = -1, num_df_in_set = -1;
+                    ex_get_set_param(readFID, EX_NODE_SET, ids[i], &num_nodes_in_set, &num_df_in_set);
+                
+                    ex_put_set_param(writeFID, EX_NODE_SET, ids[i], num_nodes_in_set, num_df_in_set);
+                    
+                    idx_t *node_list = new idx_t[num_nodes_in_set];
+                    real_t *dist_fact = new real_t[num_nodes_in_set];
+                
+                    ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL);
+                
+                    ex_put_set(writeFID, EX_NODE_SET, ids[i], node_list, NULL);
+                
+                    if (num_df_in_set > 0) {
+                        ex_get_set_dist_fact(readFID, EX_NODE_SET, ids[i], dist_fact);
+                        ex_put_set_dist_fact(writeFID, EX_NODE_SET, ids[i], dist_fact);
+                    }
+                
+                    delete[] node_list;
+                    delete[] dist_fact;
+                }
+                delete[] ids;
+
+                /* read node set properties */
+                idx_t num_props;
+                real_t fdum;
+                char *cdum = NULL;
+                ex_inquire(readFID, EX_INQ_NS_PROP, &num_props, &fdum, cdum);
+                
+                char *prop_names[3];
+                for (int i = 0; i < num_props; i++) {
+                    prop_names[i] = new char[MAX_STR_LENGTH + 1];
+                }
+                idx_t *prop_values = new idx_t[params.num_node_sets];
+                
+                ex_get_prop_names(readFID, EX_NODE_SET, prop_names);
+                ex_put_prop_names(writeFID, EX_NODE_SET, num_props, prop_names);
+                
+                for (int i = 0; i < num_props; i++) {
+                    ex_get_prop_array(readFID, EX_NODE_SET, prop_names[i], prop_values);
+                    ex_put_prop_array(writeFID, EX_NODE_SET, prop_names[i], prop_values);
+                }
+                for (int i = 0; i < num_props; i++) {
+                    delete[] prop_names[i];
+                }
+                delete[] prop_values;
+                
+                /* read and write individual side sets */
+                
+                ids = new idx_t[params.num_side_sets];
+                
+                ex_get_ids(readFID, EX_SIDE_SET, ids);
+                
+                for (int i = 0; i < params.num_side_sets; i++) {
+                    idx_t num_sides_in_set = -1, num_df_in_set = -1;
+                    ex_get_set_param(readFID, EX_SIDE_SET, ids[i], &num_sides_in_set, &num_df_in_set);                
+                    ex_put_set_param(writeFID, EX_SIDE_SET, ids[i], num_sides_in_set, num_df_in_set);
+                
+                    /* Note: The # of elements is same as # of sides!  */
+                    idx_t num_elem_in_set = num_sides_in_set;
+                    idx_t *elem_list       = new idx_t[num_elem_in_set];
+                    idx_t *side_list       = new idx_t[num_sides_in_set];
+                    idx_t *node_ctr_list   = new idx_t[num_elem_in_set];
+                    idx_t *node_list       = new idx_t[num_elem_in_set * 21];
+                    real_t *dist_fact       = new real_t[num_df_in_set];
+                
+                    ex_get_set(readFID, EX_SIDE_SET, ids[i], elem_list, side_list);
+                    ex_put_set(writeFID, EX_SIDE_SET, ids[i], elem_list, side_list);
+                    ex_get_side_set_node_list(readFID, ids[i], node_ctr_list, node_list);
+
+                    if (num_df_in_set > 0) {
+                        ex_get_set_dist_fact(readFID, EX_SIDE_SET, ids[i], dist_fact);
+                        ex_put_set_dist_fact(writeFID, EX_SIDE_SET, ids[i], dist_fact);
+                    }
+                
+                    delete[] elem_list;
+                    delete[] side_list;
+                    delete[] node_ctr_list;
+                    delete[] node_list;
+                    delete[] dist_fact;
+                }
+                
+                /* read side set properties */
+                ex_inquire(readFID, EX_INQ_SS_PROP, &num_props, &fdum, cdum);
+                
+                for (int i = 0; i < num_props; i++) {
+                    prop_names[i] = new char[MAX_STR_LENGTH + 1];
+                }
+                
+                ex_get_prop_names(readFID, EX_SIDE_SET, prop_names);
+                
+                for (int i = 0; i < num_props; i++) {
+                    for (int j = 0; j < params.num_side_sets; j++) {
+                        idx_t prop_value;
+                        ex_get_prop(readFID, EX_SIDE_SET, ids[j], prop_names[i], &prop_value);
+                    
+                        if (i > 0) { /* first property is ID so it is already stored */
+                            ex_put_prop(writeFID, EX_SIDE_SET, ids[j], prop_names[i], prop_value);
                         }
                     }
-                    ex_put_conn(writeFID, EX_ELEM_BLOCK, i, connect, NULL, NULL);
-                    delete[] connect;
+                }
+                for (int i = 0; i < num_props; i++) {
+                    delete[] prop_names[i];
+                }
+                delete[] ids;
+                
+                /* read and write QA records */
+                idx_t num_qa_rec = -1;
+                ex_inquire(readFID, EX_INQ_QA, &num_qa_rec, &fdum, cdum);
+                char *qa_record[2][4];
+                for (int i = 0; i < num_qa_rec; i++) {
+                    for (int j = 0; j < 4; j++) {
+                        qa_record[i][j] = new char[(MAX_STR_LENGTH + 1)];
+                    }
+                }
+                
+                ex_get_qa(readFID, qa_record);
+                ex_put_qa(writeFID, num_qa_rec, qa_record);
+                
+                for (int i = 0; i < num_qa_rec; i++) {
+                    for (int j = 0; j < 4; j++) {
+                    delete[] qa_record[i][j];
+                    }
+                }
+                /* read and write information records */
+                idx_t num_info = -1;
+                ex_inquire(readFID, EX_INQ_INFO, &num_info, &fdum, cdum);
+                char *info[num_info];
+                for (int i = 0; i < num_info; i++) {
+                    info[i] = new char[MAX_LINE_LENGTH + 1];
+                }
+                
+                ex_get_info(readFID, info);
+                ex_put_info(writeFID, num_info, info);
+                
+                for (int i = 0; i < num_info; i++) {
+                    delete[] info[i];
                 }
                 return true;
             }
