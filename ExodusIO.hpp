@@ -186,8 +186,8 @@ namespace ExodusIO {
                 }
                     
                 for (int i = 0; i < nparts + 1; i++) {
-                    if (i == nparts) std::cout << "Any Partition: [";
-                    else std::cout << "Partition #" << i << ": [";
+                    if (i == nparts) std::cout << "Any Partition(" << elembin[i].size() << "): [";
+                    else std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
                     for (int j = 0; j < elembin[i].size(); j++) {
                         if (j) std::cout << ",";
                         std::cout << elembin[i][j];
@@ -197,7 +197,6 @@ namespace ExodusIO {
 
                 idx_t numparts = 0;
                 for (int i = 0; i < nparts + 1; i++) {
-                    idx_t num_elems_per_block = elembin[i].size();
                     idx_t num_nodes_per_elem = -1;
                     for (idx_t elemIdx : elembin[i]) {
                         num_nodes_per_elem = elementsIdx[elemIdx + 1] - elementsIdx[elemIdx];
@@ -210,24 +209,24 @@ namespace ExodusIO {
 
                 // Write out new header
                 ex_put_init(writeFID, params.title, params.num_dim, params.num_nodes, params.num_elem, numparts, params.num_node_sets, params.num_side_sets);
-                
+
                 // Writes out node coordinations
-                real_t xs[params.num_nodes];
-                real_t ys[params.num_nodes];
-                real_t zs[params.num_nodes];
-                // if (params.num_dim >= 3) zs = new real_t[params.num_nodes];
+                real_t *xs = new real_t[params.num_nodes];
+                real_t *ys = new real_t[params.num_nodes];
+                real_t *zs = NULL;
+                if (params.num_dim >= 3) zs = new real_t[params.num_nodes];
                 ex_get_coord(readFID, xs, ys, zs);
                 std::cout << "Node Coordinates: [";
                 for (int i = 0; i < params.num_nodes; i++) {
                     if (i) std::cout << ",";
-                    std::cout << "(" << xs[i] << "," << ys[i] << "," << zs[i] << ")";
+                    std::cout << "(" << xs[i] << "," << ys[i] << "," << (zs ? zs[i] : 0) << ")";
                 }
+                std::cout << "]" << std::endl;
                 ex_put_coord(writeFID, xs, ys, zs);
                 // NOTE: Bad Free when trying to delete[] the ys and zs, but not xs... Debug Later!
-                std::cout << "]" << std::endl;
-                // delete[] xs;
-                // delete[] ys;
-                // if (params.num_dim >= 3) delete[] zs;
+                delete[] xs;
+                delete[] ys;
+                if (params.num_dim >= 3) delete[] zs;
 
                 // Write out coordinate names
                 char *coord_names[params.num_dim];
@@ -241,21 +240,32 @@ namespace ExodusIO {
                 }
 
                 // Write element map
-                int *elem_map = new int[params.num_elem];
+                idx_t *elem_map = new idx_t[params.num_elem];
                 ex_get_map(readFID, elem_map);
                 ex_put_map(writeFID, elem_map);
                 delete[] elem_map;
 
+                for (int i = 0; i < nparts + 1; i++) {
+                    if (i == nparts) std::cout << "Any Partition(" << elembin[i].size() << "): [";
+                    else std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
+                    for (int j = 0; j < elembin[i].size(); j++) {
+                        if (j) std::cout << ",";
+                        std::cout << elembin[i][j];
+                    }
+                    std::cout << "]" << std::endl;
+                }
+
                 // Write new element blocks
                 int currPart = 0;
                 for (int i = 0; i < nparts + 1; i++) {
-                    idx_t num_elems_per_block = elembin[i].size();
+                    size_t num_elems_per_block = elembin[i].size();
                     idx_t num_nodes_per_elem = -1;
                     std::cout << "num_elems_per_block=" << num_elems_per_block << std::endl;
-                    for (int j = 0; j < num_elems_per_block; j++) {
+                    for (size_t j = 0; j < num_elems_per_block; j++) {
+                        std::cout << "Index:" << j << ", Size: " << elembin[i].size() << std::endl;
                         idx_t elemIdx = elembin[i][j];
                         std::cout << "elemIdx=" << elemIdx << std::endl;
-                        num_nodes_per_elem = elementsIdx[elemIdx + 1] - elementsIdx[elemIdx];
+                        num_nodes_per_elem = abs(elementsIdx[elemIdx + 1] - elementsIdx[elemIdx]);
                         std::cout << "num_nodes_per_elem=" << num_nodes_per_elem << std::endl;
                         break;
                     }

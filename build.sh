@@ -12,7 +12,7 @@ EXODUSII_LIB=/Users/LouisJenkinsCS/spack/opt/spack/darwin-bigsur-broadwell/apple
 METIS_LIB=/usr/local/lib/
 PARMETIS_LDFLAGS="-lparmetis"
 TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgorithms -lteuchoscore -lteuchoscomm -lteuchosparameterlist -lzoltan2 -lxpetra -lxpetra-sup -lgaleri-xpetra -lgaleri-epetra -ltpetraclassiclinalg -ltpetraclassiclinalg -lzoltan -lteuchoskokkoscomm -lteuchoskokkoscompat -lteuchosnumerics"
-CCFLAGS="-std=c++17 -O3 -g -ggdb3 -fsanitize=address"
+CCFLAGS="-std=c++17 -O0 -g -ggdb3"
 
 # Build Examples
 # mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS Example1.cc -o exec/Example1
@@ -20,5 +20,6 @@ CCFLAGS="-std=c++17 -O3 -g -ggdb3 -fsanitize=address"
 # mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS Example3.cc -o exec/Example3
 # mpic++ -I$TRILINOS_INCLUDE -I$PARMETIS_INCLUDE -L$TRILINOS_LIB -L$PARMETIS_LIB $CCFLAGS $TRILINOS_LDFLAGS $PARMETIS_LDFLAGS Example4.cc -o exec/Example4
 # mpic++ -I$TRILINOS_INCLUDE -I$PARMETIS_INCLUDE -L$TRILINOS_LIB -L$PARMETIS_LIB $CCFLAGS $TRILINOS_LDFLAGS $PARMETIS_LDFLAGS SimpleExampleImpl.cc -o exec/SimpleExampleImpl
-mpic++ -lexodus -lmetis -I$EXODUSII_INCLUDE -L$EXODUSII_LIB -L$METIS_LIB $CCFLAGS ExodusIOTest.cpp -o exec/ExodusIOTest
+mpic++ -Wall -lexodus -lmetis -I$EXODUSII_INCLUDE -L$EXODUSII_LIB -L$METIS_LIB $CCFLAGS ExodusIOTest.cpp -o exec/ExodusIOTest
 install_name_tool -change libmetis.dylib /usr/local/lib/libmetis.dylib exec/ExodusIOTest
+mpic++ -Wall -lexodus -I$EXODUSII_INCLUDE -L$EXODUSII_LIB $CCFLAGS ExodusMWE.cpp -o exec/ExodusMWE
