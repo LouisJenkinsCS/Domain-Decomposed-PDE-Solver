@@ -1,0 +1,285 @@
+==32086== Memcheck, a memory error detector
+==32086== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
+==32086== Using Valgrind-3.15.0 and LibVEX; rerun with -h for copyright info
+==32086== Command: exec/ExodusMWE
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4863E67: ex__get_entity_count (ex_get_init_ext.c:36)
+==32086==    by 0x4863E67: ex_get_init_ext (ex_get_init_ext.c:121)
+==32086==    by 0x4012C5: main (ExodusMWE.cpp:17)
+==32086== 
+Title: cubit(/home/rvierte/rectangle-tris.exo): 06/08/2021: 08:50:31
+# of Dimensions: 3
+# of Blobs: 0
+# of Assembly: 0
+# of Nodes: 9
+# of Elements: 8
+# of Faces: 0
+# of Element Blocks: 1
+# of Face Blocks: 0
+# of Node Sets: 0
+# of Side Sets: 1
+# of Face Sets: 0
+# of Node Maps: 0
+# of Element Maps: 0
+# of Face Maps0
+==32086== Invalid write of size 8
+==32086==    at 0x4E9A312: swapn8b (ncx.m4:526)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f60 is 32 bytes inside a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid write of size 8
+==32086==    at 0x4E9A45E: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f60 is 32 bytes inside a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid read of size 8
+==32086==    at 0x4E9A329: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f68 is 4 bytes after a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid read of size 8
+==32086==    at 0x4E9A347: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f68 is 4 bytes after a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid read of size 8
+==32086==    at 0x4E9A375: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f68 is 4 bytes after a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid read of size 8
+==32086==    at 0x4E9A3A3: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f68 is 4 bytes after a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid read of size 8
+==32086==    at 0x4E9A3D1: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f68 is 4 bytes after a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid read of size 8
+==32086==    at 0x4E9A3F4: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f68 is 4 bytes after a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid read of size 8
+==32086==    at 0x4E9A417: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f68 is 4 bytes after a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Invalid read of size 8
+==32086==    at 0x4E9A43D: swapn8b (ncx.m4:527)
+==32086==    by 0x4EA8837: ncx_getn_double_double (ncx.m4:3512)
+==32086==    by 0x4E87A76: getNCvx_double_double (putget.m4:905)
+==32086==    by 0x4E8DAC6: readNCv (putget.m4:1288)
+==32086==    by 0x4E8F819: NC3_get_vara (putget.m4:1875)
+==32086==    by 0x4E56935: NC_get_vara (dvarget.c:104)
+==32086==    by 0x4E569A3: NC_get_var (dvarget.c:138)
+==32086==    by 0x4E587F2: nc_get_var_double (dvarget.c:1083)
+==32086==    by 0x4861827: ex_get_coord (ex_get_coord.c:216)
+==32086==    by 0x401611: main (ExodusMWE.cpp:36)
+==32086==  Address 0x5e56f68 is 4 bytes after a block of size 36 alloc'd
+==32086==    at 0x483C583: operator new[](unsigned long) (vg_replace_malloc.c:433)
+==32086==    by 0x4014FB: main (ExodusMWE.cpp:27)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C951F8: __printf_fp_l (printf_fp.c:387)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C95212: __printf_fp_l (printf_fp.c:387)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C90CB4: __mpn_extract_double (dbl2mpn.c:56)
+==32086==    by 0x4C9550E: __printf_fp_l (printf_fp.c:387)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C90CB9: __mpn_extract_double (dbl2mpn.c:60)
+==32086==    by 0x4C9550E: __printf_fp_l (printf_fp.c:387)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C95F70: __printf_fp_l (printf_fp.c:969)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C95FA9: __printf_fp_l (printf_fp.c:972)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C95FE4: __printf_fp_l (printf_fp.c:982)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C9601A: round_away (rounding-mode.h:52)
+==32086==    by 0x4C9601A: __printf_fp_l (printf_fp.c:989)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C96051: __printf_fp_l (printf_fp.c:1088)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+==32086== Conditional jump or move depends on uninitialised value(s)
+==32086==    at 0x4C96284: __printf_fp_l (printf_fp.c:1157)
+==32086==    by 0x4CB0639: __vfprintf_internal (vfprintf-internal.c:1687)
+==32086==    by 0x4CC5119: __vsnprintf_internal (vsnprintf.c:114)
+==32086==    by 0x49DDA5F: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A0F035: std::ostreambuf_iterator<char, std::char_traits<char> > std::num_put<char, std::ostreambuf_iterator<char, std::char_traits<char> > >::_M_insert_float<double>(std::ostreambuf_iterator<char, std::char_traits<char> >, std::ios_base&, char, char, double) const (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4A1D72D: std::ostream& std::ostream::_M_insert<double>(double) (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.28)
+==32086==    by 0x4016B7: main (ExodusMWE.cpp:40)
+==32086== 
+Node Coordinates: [(0,0,0),(-2.3125,0,0),(0,0,0),(-2.3125,-2.3125,0),(0,0,0),(0,-2.3125,0),(0,0,0),(0,2.3125,0),(0,0,0)]
+==32086== 
+==32086== HEAP SUMMARY:
+==32086==     in use at exit: 548,672 bytes in 200 blocks
+==32086==   total heap usage: 3,089 allocs, 2,889 frees, 862,208 bytes allocated
+==32086== 
+==32086== LEAK SUMMARY:
+==32086==    definitely lost: 0 bytes in 0 blocks
+==32086==    indirectly lost: 0 bytes in 0 blocks
+==32086==      possibly lost: 0 bytes in 0 blocks
+==32086==    still reachable: 548,672 bytes in 200 blocks
+==32086==         suppressed: 0 bytes in 0 blocks
+==32086== Rerun with --leak-check=full to see details of leaked memory
+==32086== 
+==32086== Use --track-origins=yes to see where uninitialised values come from
+==32086== For lists of detected and suppressed errors, rerun with: -s
+==32086== ERROR SUMMARY: 182 errors from 21 contexts (suppressed: 0 from 0)

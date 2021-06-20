@@ -25,13 +25,13 @@ int main(void) {
 
     // Writes out node coordinations
     float *xs = new float[params.num_nodes];
-    std::memset(xs, sizeof(float), params.num_nodes);
+    std::memset(xs, 0, sizeof(float) * params.num_nodes);
     float *ys = new float[params.num_nodes];
-    std::memset(ys, sizeof(float), params.num_nodes);
+    std::memset(ys, 0, sizeof(float) * params.num_nodes);
     float *zs = NULL;
     if (params.num_dim >= 3) {
         zs = new float[params.num_nodes];
-        std::memset(zs, sizeof(float), params.num_nodes);
+        std::memset(zs, 0, sizeof(float) * params.num_nodes);
     }
     if (ex_get_coord(exoid, xs, ys, zs)) return -1;
     std::cout << "Node Coordinates: [";
