@@ -2,6 +2,10 @@
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
+#include <cassert>
+
+typedef int64_t idx_t;
+typedef double real_t;
 
 int main(void) {
     int cpuWS = 8;
@@ -18,30 +22,17 @@ int main(void) {
         return -1;
     }
     std::cout << "Title: " << params.title << "\n# of Dimensions: " << params.num_dim  << "\n# of Blobs: " << params.num_blob << "\n# of Assembly: " << params.num_assembly
-        << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
-        << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
-        << "\n# of Side Sets: " << params.num_side_sets << "\n# of Face Sets: " << params.num_face_sets << "\n# of Node Maps: " << params.num_node_maps
-        << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps" << params.num_face_maps << std::endl;
+                    << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
+                    << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
+                    << "\n# of Side Sets: " << params.num_side_sets << "\n# of Face Sets: " << params.num_face_sets << "\n# of Node Maps: " << params.num_node_maps
+                    << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps: " << params.num_face_maps 
+                    << "\n# of Bytes in idx_t: " << sizeof(idx_t) << "\n# of Bytes in real_t: " << sizeof(real_t) << std::endl;
 
-    // Writes out node coordinations
-    float *xs = new float[params.num_nodes];
-    std::memset(xs, 0, sizeof(float) * params.num_nodes);
-    float *ys = new float[params.num_nodes];
-    std::memset(ys, 0, sizeof(float) * params.num_nodes);
-    float *zs = NULL;
-    if (params.num_dim >= 3) {
-        zs = new float[params.num_nodes];
-        std::memset(zs, 0, sizeof(float) * params.num_nodes);
+    idx_t *ids = new idx_t[params.num_elem_blk];
+    assert(ex_get_ids(exoid, EX_ELEM_BLOCK, ids));
+    for (idx_t i = 0; i < params.num_elem_blk; i++) {
+        std::cout << "Native int64_t value: " << ids[i];
+        std::cout << "Truncated int value: " << (int)ids[i];
     }
-    if (ex_get_coord(exoid, xs, ys, zs)) return -1;
-    std::cout << "Node Coordinates: [";
-    for (int i = 0; i < params.num_nodes; i++) {
-        if (i) std::cout << ",";
-        std::cout << "(" << xs[i] << "," << ys[i] << "," << (zs ? zs[i] : 0) << ")";
-    }
-    std::cout << "]" << std::endl;
-    delete[] xs;
-    delete[] ys;
-    if (params.num_dim >= 3) delete[] zs;
     return -1;
 }

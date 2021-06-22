@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstdlib>
 #include <cstring>
+#include <errno.h>
 
 /*
     An ExodusII wrapper that provides some C++ bindings
@@ -18,12 +19,13 @@ namespace ExodusIO {
             
             // Opens the read in exodus file
             bool open(std::string fname, bool read_only = false) {
-                int cpuWS = 8;
-                int ioWS = 8;
+                int cpuWS = sizeof(real_t);
+                int ioWS = sizeof(real_t);
                 float version = 0.;
 
                 int tmpFid = ex_open(fname.c_str(), read_only ? EX_READ : EX_WRITE, &cpuWS, &ioWS, &version);
                 if (tmpFid <= 0) {
+                    perror("ex_open");
                     return false;
                 }
                 readFID = tmpFid;
@@ -32,18 +34,19 @@ namespace ExodusIO {
 
             // Opens the writen out exodus file (modification of read in exodus file)
             bool create(std::string fname) {
-                int cpuWS = 8;
-                int ioWS = 8;
+                int cpuWS = sizeof(real_t);
+                int ioWS = sizeof(real_t);
 
                 int tmpFid = ex_create(fname.c_str(), EX_CLOBBER, &cpuWS, &ioWS);
                 if (tmpFid <= 0) {
+                    perror("ex_create");
                     return false;
                 }
                 writeFID = tmpFid;
                 return true;
             }
 
-            bool decompose() {
+            bool decompose(int partitions) {
                 if (readFID == -1) return false;
 
                 // Gather all data we need to pass to Metis
@@ -55,25 +58,37 @@ namespace ExodusIO {
                     << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
                     << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
                     << "\n# of Side Sets: " << params.num_side_sets << "\n# of Face Sets: " << params.num_face_sets << "\n# of Node Maps: " << params.num_node_maps
-                    << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps" << params.num_face_maps << std::endl;
+                    << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps: " << params.num_face_maps 
+                    << "\n# of Bytes in idx_t: " << sizeof(idx_t) << "\n# of Bytes in real_t: " << sizeof(real_t) << std::endl;
 
                 int *ids = new int[params.num_elem_blk];
-                int num_elem_in_block;
-                int num_nodes_per_elem;
-                int num_edges_per_elem;
-                int num_faces_per_elem;
-                int num_attr;
+                for (int i = 0; i < params.num_elem_blk; i++) ids[i] = 0;
+                idx_t num_elem_in_block = 0;
+                idx_t num_nodes_per_elem = 0;
+                idx_t num_edges_per_elem = 0;
+                idx_t num_faces_per_elem = 0;
+                idx_t num_attr = 0;
                 char elemtype[MAX_STR_LENGTH+1];
 
-                if (ex_get_ids(readFID, EX_ELEM_BLOCK, ids)) return false;
-                int elementsIdx[params.num_elem + 1];
-                std::vector<int> nodesInElements;
-                int elemIdx = 0;
-                int nodeIdx = 0;
+                if (ex_get_ids(readFID, EX_ELEM_BLOCK, ids)) {
+                    std::cerr << "Failed to call `ex_get_ids`" << std::endl;
+                    return false;
+                }
+                for (int i = 0; i < params.num_elem_blk; i++) {
+                    std::cout << "Element Block Id: " << (int) ids[i] << std::endl;
+                }
+                idx_t elementsIdx[params.num_elem + 1];
+                for (int i = 0; i < params.num_elem + 1; i++) elementsIdx[i] = 0;
+                std::vector<idx_t> nodesInElements;
+                idx_t elemIdx = 0;
+                idx_t nodeIdx = 0;
 
                 // using the element block parameters read the element block info
-                for (int i=0; i<params.num_elem_blk; i++) {
-                    if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype,&num_elem_in_block,&num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) return false;
+                for (idx_t i=0; i<params.num_elem_blk; i++) {
+                    if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype, &num_elem_in_block, &num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) {
+                        std::cerr << "Failed to `ex_get_block` element block " << i+1 << " of " << params.num_elem_blk << " with id " << ids[i] << std::endl;
+                        return false;
+                    }
                     std::cout << "Block #" << i << " has the following..."
                         << "\n\t# of Elements: " << num_elem_in_block
                         << "\n\t# of Nodes per Element: " << num_nodes_per_elem
@@ -82,10 +97,11 @@ namespace ExodusIO {
                         << "\n\t# of Attributes: " << num_attr
                         << "\n\tElement Type: " << elemtype << std::endl;
 
-                        int *connect = new int[num_elem_in_block * num_nodes_per_elem];
+                        idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
+                        for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i] = 0;
                         ex_get_elem_conn(readFID, ids[i], connect);
                         std::cout << "Block #" << i << ": {";
-                        for (int j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
+                        for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
                             if (j) std::cout << ",";
                             if (j % num_nodes_per_elem == 0) { 
                                 std::cout << "[";
@@ -101,13 +117,13 @@ namespace ExodusIO {
                 }
                 elementsIdx[elemIdx] = nodeIdx;
                 std::cout << "Indexing: {";
-                for (int i = 0; i < params.num_elem + 1; i++) {
+                for (idx_t i = 0; i < params.num_elem + 1; i++) {
                     if (i) std::cout << ",";
                     std::cout << elementsIdx[i];
                 }
                 std::cout << "}" << std::endl;
                 std::cout << "Nodes: {";
-                for (int i = 0; i < nodesInElements.size(); i++) {
+                for (idx_t i = 0; i < nodesInElements.size(); i++) {
                     if (i) std::cout << ",";
                     std::cout << nodesInElements[i];
                 }
@@ -120,14 +136,14 @@ namespace ExodusIO {
                 idx_t *vwgt = nullptr;
                 idx_t *vsize = nullptr;
                 idx_t ncommon = 1;
-                idx_t nparts = 2;
+                idx_t nparts = partitions;
                 real_t *tpwgts = nullptr;
                 idx_t *options = nullptr;
                 idx_t objval = 0;
-                idx_t *epart = new int[ne];
-                idx_t *npart = new int[nn];
-                for (int i = 0; i < ne; i++) epart[i] = 0;
-                for (int i = 0; i < nn; i++) npart[i] = 0;
+                idx_t *epart = new idx_t[ne];
+                idx_t *npart = new idx_t[nn];
+                for (idx_t i = 0; i < ne; i++) epart[i] = 0;
+                for (idx_t i = 0; i < nn; i++) npart[i] = 0;
                 // Note: We are assuming that there is only one Element Type in this mesh...
                 if (strncmp(elemtype, "TETRA", 5)) {
                     ncommon = 3;
@@ -139,19 +155,19 @@ namespace ExodusIO {
                 std::cout << "Calling METIS_PartMeshNodal with " << nparts << " partitions." << std::endl;
                 int retval = METIS_PartMeshDual(&ne, &nn, eptr, eind, vwgt, vsize, &ncommon, &nparts, tpwgts, options, &objval, epart, npart);
                 if (retval != METIS_OK) {
-                    std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR"));
+                    std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR")) << std::endl;
                     return false;
                 }
 
                 std::cout << "ObjVal = " << objval << std::endl;
                 std::cout << "Element Partition: {";
-                for (int i = 0; i < ne; i++) {
+                for (idx_t i = 0; i < ne; i++) {
                     if (i) std::cout << ",";
                     std::cout << epart[i];
                 }
                 std::cout << "}" << std::endl;
                 std::cout << "Node Partition: {";
-                for (int i = 0; i < nn; i++) {
+                for (idx_t i = 0; i < nn; i++) {
                     if (i) std::cout << ",";
                     std::cout << npart[i];
                 }
@@ -160,14 +176,14 @@ namespace ExodusIO {
                 if (npart[0] == -2) npart[0] = 0;
 
                 std::vector<idx_t> elembin[nparts + 1];
-                for (int i=0; i<params.num_elem_blk; i++) {
+                for (idx_t i=0; i<params.num_elem_blk; i++) {
                     if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype,&num_elem_in_block,&num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) return false;
     
-                    int *connect = new int[num_elem_in_block * num_nodes_per_elem];
+                    idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
                     ex_get_elem_conn(readFID, ids[i], connect);
-                    int idx = 0;
+                    idx_t idx = 0;
                     idx_t part = epart[idx];
-                    for (int j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
+                    for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
                         // Check if every node in this block is in the same partition...
                         if (npart[connect[j]-1] != part && false) {
                             j += num_nodes_per_elem - (j % num_nodes_per_elem) - 1;
@@ -185,10 +201,10 @@ namespace ExodusIO {
                     delete[] connect;
                 }
                     
-                for (int i = 0; i < nparts + 1; i++) {
+                for (idx_t i = 0; i < nparts + 1; i++) {
                     if (i == nparts) std::cout << "Any Partition(" << elembin[i].size() << "): [";
                     else std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
-                    for (int j = 0; j < elembin[i].size(); j++) {
+                    for (idx_t j = 0; j < elembin[i].size(); j++) {
                         if (j) std::cout << ",";
                         std::cout << elembin[i][j];
                     }
@@ -196,7 +212,7 @@ namespace ExodusIO {
                 }
 
                 idx_t numparts = 0;
-                for (int i = 0; i < nparts + 1; i++) {
+                for (idx_t i = 0; i < nparts + 1; i++) {
                     idx_t num_nodes_per_elem = -1;
                     for (idx_t elemIdx : elembin[i]) {
                         num_nodes_per_elem = elementsIdx[elemIdx + 1] - elementsIdx[elemIdx];
@@ -211,13 +227,14 @@ namespace ExodusIO {
                 ex_put_init(writeFID, params.title, params.num_dim, params.num_nodes, params.num_elem, numparts, params.num_node_sets, params.num_side_sets);
 
                 // Writes out node coordinations
+                std::cout << "Sizeof(real_t) = " << sizeof(real_t) << std::endl;
                 real_t *xs = new real_t[params.num_nodes];
                 real_t *ys = new real_t[params.num_nodes];
                 real_t *zs = NULL;
                 if (params.num_dim >= 3) zs = new real_t[params.num_nodes];
                 ex_get_coord(readFID, xs, ys, zs);
                 std::cout << "Node Coordinates: [";
-                for (int i = 0; i < params.num_nodes; i++) {
+                for (idx_t i = 0; i < params.num_nodes; i++) {
                     if (i) std::cout << ",";
                     std::cout << "(" << xs[i] << "," << ys[i] << "," << (zs ? zs[i] : 0) << ")";
                 }
@@ -230,12 +247,12 @@ namespace ExodusIO {
 
                 // Write out coordinate names
                 char *coord_names[params.num_dim];
-                for (int i = 0; i < params.num_dim; i++) {
+                for (idx_t i = 0; i < params.num_dim; i++) {
                     coord_names[i] = new char[MAX_STR_LENGTH + 1];
                 }
                 ex_get_coord_names(readFID, coord_names);
                 ex_put_coord_names(writeFID, coord_names);
-                for (int i = 0; i < params.num_dim; i++) {
+                for (idx_t i = 0; i < params.num_dim; i++) {
                     delete[] coord_names[i];
                 }
 
@@ -245,10 +262,10 @@ namespace ExodusIO {
                 ex_put_map(writeFID, elem_map);
                 delete[] elem_map;
 
-                for (int i = 0; i < nparts + 1; i++) {
+                for (idx_t i = 0; i < nparts + 1; i++) {
                     if (i == nparts) std::cout << "Any Partition(" << elembin[i].size() << "): [";
                     else std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
-                    for (int j = 0; j < elembin[i].size(); j++) {
+                    for (idx_t j = 0; j < elembin[i].size(); j++) {
                         if (j) std::cout << ",";
                         std::cout << elembin[i][j];
                     }
@@ -256,8 +273,8 @@ namespace ExodusIO {
                 }
 
                 // Write new element blocks
-                int currPart = 0;
-                for (int i = 0; i < nparts + 1; i++) {
+                idx_t currPart = 0;
+                for (idx_t i = 0; i < nparts + 1; i++) {
                     size_t num_elems_per_block = elembin[i].size();
                     idx_t num_nodes_per_elem = -1;
                     std::cout << "num_elems_per_block=" << num_elems_per_block << std::endl;
@@ -278,7 +295,7 @@ namespace ExodusIO {
                     ex_put_block(writeFID, EX_ELEM_BLOCK, currPart, elemtype, num_elems_per_block, num_nodes_per_elem, 0, 0, 0);
 
                     idx_t *connect = new idx_t[num_elems_per_block * num_nodes_per_elem];
-                    int idx = 0;
+                    idx_t idx = 0;
                     std::cout << "Connectivity for Block #" << currPart << ": [ ";
                     for (idx_t elemIdx : elembin[i]) {
                         std::cout << "[ ";
@@ -296,10 +313,10 @@ namespace ExodusIO {
                     delete[] connect;
                 }
 
-                ids = new idx_t[params.num_node_sets];
+                ids = new int[params.num_node_sets];
                 ex_get_ids(readFID, EX_NODE_SET, ids);
                 
-                for (int i = 0; i < params.num_node_sets; i++) {
+                for (idx_t i = 0; i < params.num_node_sets; i++) {
                     idx_t num_nodes_in_set = -1, num_df_in_set = -1;
                     ex_get_set_param(readFID, EX_NODE_SET, ids[i], &num_nodes_in_set, &num_df_in_set);
                 
@@ -324,12 +341,12 @@ namespace ExodusIO {
 
                 /* read node set properties */
                 idx_t num_props;
-                real_t fdum;
+                float fdum;
                 char *cdum = NULL;
                 ex_inquire(readFID, EX_INQ_NS_PROP, &num_props, &fdum, cdum);
                 
                 char *prop_names[3];
-                for (int i = 0; i < num_props; i++) {
+                for (idx_t i = 0; i < num_props; i++) {
                     prop_names[i] = new char[MAX_STR_LENGTH + 1];
                 }
                 idx_t *prop_values = new idx_t[params.num_node_sets];
@@ -337,22 +354,22 @@ namespace ExodusIO {
                 ex_get_prop_names(readFID, EX_NODE_SET, prop_names);
                 ex_put_prop_names(writeFID, EX_NODE_SET, num_props, prop_names);
                 
-                for (int i = 0; i < num_props; i++) {
+                for (idx_t i = 0; i < num_props; i++) {
                     ex_get_prop_array(readFID, EX_NODE_SET, prop_names[i], prop_values);
                     ex_put_prop_array(writeFID, EX_NODE_SET, prop_names[i], prop_values);
                 }
-                for (int i = 0; i < num_props; i++) {
+                for (idx_t i = 0; i < num_props; i++) {
                     delete[] prop_names[i];
                 }
                 delete[] prop_values;
                 
                 /* read and write individual side sets */
                 
-                ids = new idx_t[params.num_side_sets];
+                ids = new int[params.num_side_sets];
                 
                 ex_get_ids(readFID, EX_SIDE_SET, ids);
                 
-                for (int i = 0; i < params.num_side_sets; i++) {
+                for (idx_t i = 0; i < params.num_side_sets; i++) {
                     idx_t num_sides_in_set = -1, num_df_in_set = -1;
                     ex_get_set_param(readFID, EX_SIDE_SET, ids[i], &num_sides_in_set, &num_df_in_set);                
                     ex_put_set_param(writeFID, EX_SIDE_SET, ids[i], num_sides_in_set, num_df_in_set);
@@ -384,14 +401,14 @@ namespace ExodusIO {
                 /* read side set properties */
                 ex_inquire(readFID, EX_INQ_SS_PROP, &num_props, &fdum, cdum);
                 
-                for (int i = 0; i < num_props; i++) {
+                for (idx_t i = 0; i < num_props; i++) {
                     prop_names[i] = new char[MAX_STR_LENGTH + 1];
                 }
                 
                 ex_get_prop_names(readFID, EX_SIDE_SET, prop_names);
                 
-                for (int i = 0; i < num_props; i++) {
-                    for (int j = 0; j < params.num_side_sets; j++) {
+                for (idx_t i = 0; i < num_props; i++) {
+                    for (idx_t j = 0; j < params.num_side_sets; j++) {
                         idx_t prop_value;
                         ex_get_prop(readFID, EX_SIDE_SET, ids[j], prop_names[i], &prop_value);
                     
@@ -400,7 +417,7 @@ namespace ExodusIO {
                         }
                     }
                 }
-                for (int i = 0; i < num_props; i++) {
+                for (idx_t i = 0; i < num_props; i++) {
                     delete[] prop_names[i];
                 }
                 delete[] ids;
@@ -409,8 +426,8 @@ namespace ExodusIO {
                 idx_t num_qa_rec = -1;
                 ex_inquire(readFID, EX_INQ_QA, &num_qa_rec, &fdum, cdum);
                 char *qa_record[2][4];
-                for (int i = 0; i < num_qa_rec; i++) {
-                    for (int j = 0; j < 4; j++) {
+                for (idx_t i = 0; i < num_qa_rec; i++) {
+                    for (idx_t j = 0; j < 4; j++) {
                         qa_record[i][j] = new char[(MAX_STR_LENGTH + 1)];
                     }
                 }
@@ -418,8 +435,8 @@ namespace ExodusIO {
                 ex_get_qa(readFID, qa_record);
                 ex_put_qa(writeFID, num_qa_rec, qa_record);
                 
-                for (int i = 0; i < num_qa_rec; i++) {
-                    for (int j = 0; j < 4; j++) {
+                for (idx_t i = 0; i < num_qa_rec; i++) {
+                    for (idx_t j = 0; j < 4; j++) {
                     delete[] qa_record[i][j];
                     }
                 }
@@ -427,14 +444,14 @@ namespace ExodusIO {
                 idx_t num_info = -1;
                 ex_inquire(readFID, EX_INQ_INFO, &num_info, &fdum, cdum);
                 char *info[num_info];
-                for (int i = 0; i < num_info; i++) {
+                for (idx_t i = 0; i < num_info; i++) {
                     info[i] = new char[MAX_LINE_LENGTH + 1];
                 }
                 
                 ex_get_info(readFID, info);
                 ex_put_info(writeFID, num_info, info);
                 
-                for (int i = 0; i < num_info; i++) {
+                for (idx_t i = 0; i < num_info; i++) {
                     delete[] info[i];
                 }
                 return true;
