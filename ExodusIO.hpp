@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
+#include <cassert>
+#include <algorithm>
 
 /*
     An ExodusII wrapper that provides some C++ bindings
@@ -223,8 +225,24 @@ namespace ExodusIO {
                     }
                 }
 
+                std::vector<idx_t> nodebin[nparts];
+                // Add new node set parameters
+                for (int i = 0; i < nn; i++) {
+                    if (npart[i] == -2) {
+                        nodebin[0].push_back(nodesInElements[i]);
+                    } else {
+                        nodebin[npart[i]].push_back(nodesInElements[i]);
+                    }
+                }
+                // Remove duplicate nodes
+                for (int i = 0; i < nparts; i++) {
+                    std::vector<idx_t>& vec = nodebin[i];
+                    sort(vec.begin(), vec.end());
+                    vec.erase(unique(vec.begin(), vec.end()), vec.end());
+                }
+
                 // Write out new header
-                ex_put_init(writeFID, params.title, params.num_dim, params.num_nodes, params.num_elem, numparts, params.num_node_sets, params.num_side_sets);
+                ex_put_init(writeFID, params.title, params.num_dim, params.num_nodes, params.num_elem, numparts, params.num_node_sets + nparts, params.num_side_sets);
 
                 // Writes out node coordinations
                 std::cout << "Sizeof(real_t) = " << sizeof(real_t) << std::endl;
@@ -318,26 +336,55 @@ namespace ExodusIO {
                 
                 for (idx_t i = 0; i < params.num_node_sets; i++) {
                     idx_t num_nodes_in_set = -1, num_df_in_set = -1;
-                    ex_get_set_param(readFID, EX_NODE_SET, ids[i], &num_nodes_in_set, &num_df_in_set);
+                    assert(!ex_get_set_param(readFID, EX_NODE_SET, ids[i], &num_nodes_in_set, &num_df_in_set));
                 
-                    ex_put_set_param(writeFID, EX_NODE_SET, ids[i], num_nodes_in_set, num_df_in_set);
+                    assert(!ex_put_set_param(writeFID, EX_NODE_SET, ids[i], num_nodes_in_set, num_df_in_set));
                     
                     idx_t *node_list = new idx_t[num_nodes_in_set];
-                    real_t *dist_fact = new real_t[num_nodes_in_set];
+                    real_t *dist_fact = new real_t[num_nodes_in_set];\
+
                 
-                    ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL);
+                    assert(!ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL));
+                    
+                    std::cout << "Nodeset #" << ids[i] << ": [";
+                    for (int j = 0; j < num_nodes_in_set; j++) {
+                        if (j) std::cout << ",";
+                        std::cout << node_list[j];
+                    }
+                    std::cout << "]" << std::endl;
                 
-                    ex_put_set(writeFID, EX_NODE_SET, ids[i], node_list, NULL);
+                    assert(!ex_put_set(writeFID, EX_NODE_SET, ids[i], node_list, NULL));
                 
                     if (num_df_in_set > 0) {
-                        ex_get_set_dist_fact(readFID, EX_NODE_SET, ids[i], dist_fact);
-                        ex_put_set_dist_fact(writeFID, EX_NODE_SET, ids[i], dist_fact);
+                        assert(!ex_get_set_dist_fact(readFID, EX_NODE_SET, ids[i], dist_fact));
+                        assert(!ex_put_set_dist_fact(writeFID, EX_NODE_SET, ids[i], dist_fact));
                     }
                 
                     delete[] node_list;
                     delete[] dist_fact;
                 }
                 delete[] ids;
+
+                idx_t nid = params.num_node_sets + 1;
+                for (int i = 0; i < nparts; i++) {
+                    std::cout << "Nodeset #" << nid << ": [";
+                    for (int j = 0; j < nodebin[i].size(); j++) {
+                        if (j) std::cout << ",";
+                        std::cout << nodebin[i][j];
+                    }
+                    std::cout << "]" << std::endl;
+                    if (!ex_put_set_param(writeFID, EX_NODE_SET, nid, nodebin[i].size(), 0)) {
+                        std::cerr << "Failed to put set parameters for nodeset #" << nid << std::endl;
+                        std::cerr << "Parameters: (writeFID=" << writeFID << ", EX_NODE_SET, nid=" << nid << ", num_nodes=" << nodebin[i].size() << ", num_df=0)" << std::endl; 
+                        return false;
+                    }
+                    if (!ex_put_set(writeFID, EX_NODE_SET, nid, nodebin[i].data(), NULL)) {
+                        std::cerr << "Failed to put set for nodeset #" << nid << std::endl;
+                        return false;
+                    }
+                    std::cout << "Writing nodeset #" << nid << std::endl;
+                    nid++;
+                }
 
                 /* read node set properties */
                 idx_t num_props;

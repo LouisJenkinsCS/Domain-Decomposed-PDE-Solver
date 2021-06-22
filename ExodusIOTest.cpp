@@ -2,7 +2,7 @@
 
 int main(void) {
     ExodusIO::IO io;
-    if (!io.open("data/tet-cube.exo", true)) {
+    if (!io.open("data/Albany_2Load_OC.ref.exo", true)) {
         std::cerr << "Failed to open Exodus file!" << std::endl;
         return -1;
     }
