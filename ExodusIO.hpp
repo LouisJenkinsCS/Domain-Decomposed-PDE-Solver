@@ -1,3 +1,8 @@
+// TPetra data structures
+#include <Tpetra_Core.hpp>
+#include <Tpetra_Vector.hpp>
+#include <Tpetra_CrsMatrix.hpp>
+
 #include "exodusII.h"
 #include <string>
 #include <iostream>
@@ -9,11 +14,9 @@
 #include <cassert>
 #include <algorithm>
 #include <parmetis.h>
+#include <sstream>
 
-// TPetra data structures
-#include <Tpetra_Core.hpp>
-#include <Tpetra_Vector.hpp>
-#include <Tpetra_CrsMatrix.hpp>
+
 
 /*
     An ExodusII wrapper that provides some C++ bindings
@@ -57,7 +60,10 @@ namespace ExodusIO {
             // Reads in the partitioning of the Exodus file specified in `open` and calls
             // ParMETIS to construct a dual graph; this dual graph is then partitioned
             // and redistributed/balanced across the appropriate number of processes.
-            bool getMatrix(Tpetra::CrsMatrix<> &ret) {
+            bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret) {
+                auto comm = Tpetra::getDefaultComm();
+                auto rank = Teuchos::rank(*comm);
+                auto ranks = Teuchos::size(*comm);
                 if (readFID == -1) return false;
 
                 /////////////////////////////////////////////////////////////////////
@@ -69,7 +75,7 @@ namespace ExodusIO {
                 if (ex_get_init_ext(readFID,&params)) {
                     return false;
                 }
-                if (Teuchos::rank() == 0) {
+                if (rank == 0) {
                     std::cout << "Title: " << params.title << "\n# of Dimensions: " << params.num_dim  << "\n# of Blobs: " << params.num_blob << "\n# of Assembly: " << params.num_assembly
                         << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
                         << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
@@ -88,11 +94,11 @@ namespace ExodusIO {
                 char elemtype[MAX_STR_LENGTH+1];
 
                 if (ex_get_ids(readFID, EX_ELEM_BLOCK, ids)) {
-                    std::cerr << "Rank #" << Teuchos::rank() << ": " << "Failed to call `ex_get_ids`" << std::endl;
+                    std::cerr << "Rank #" << Teuchos::rank(*comm) << ": " << "Failed to call `ex_get_ids`" << std::endl;
                     return false;
                 }
                 for (int i = 0; i < params.num_elem_blk; i++) {
-                    std::cout << "Rank #" << Teuchos::rank() << ": " << "Element Block Id: " << (int) ids[i] << std::endl;
+                    std::cout << "Rank #" << Teuchos::rank(*comm) << ": " << "Element Block Id: " << (int) ids[i] << std::endl;
                 }
                 idx_t elementsIdx[params.num_elem + 1];
                 for (int i = 0; i < params.num_elem + 1; i++) elementsIdx[i] = 0;
@@ -101,22 +107,22 @@ namespace ExodusIO {
                 idx_t nodeIdx = 0;
 
                 // Compute current process' start index, and ignore everything before this...
-                idx_t startIdx = (params.num_elem / Teuchos::size()) * Teuchos::rank();
-                idx_t endIdx = (params.num_elem / Teuchos::size()) * (Teuchos::rank() + 1);
+                idx_t startIdx = (params.num_elem / ranks) * rank;
+                idx_t endIdx = (params.num_elem / ranks) * (rank + 1);
                 idx_t passedIdx = 0;
                 // Handle edge case where we have odd number of elements; give the remainder
                 // to the last process.
-                if (Teuchos::rank() == Teuchos::size() - 1) {
+                if (rank == ranks - 1) {
                     endIdx = params.num_elem;
                 }
 
                 // using the element block parameters read the element block info
                 for (idx_t i=0; i<params.num_elem_blk; i++) {
                     if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype, &num_elem_in_block, &num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) {
-                        std::cerr << "Rank #" << Teuchos::rank() << ": " << "Failed to `ex_get_block` element block " << i+1 << " of " << params.num_elem_blk << " with id " << ids[i] << std::endl;
+                        std::cerr << "Rank #" << rank << ": " << "Failed to `ex_get_block` element block " << i+1 << " of " << params.num_elem_blk << " with id " << ids[i] << std::endl;
                         return false;
                     }
-                    if (Teuchos::rank() == 0) {
+                    if (rank == 0) {
                         std::cout << "Block #" << i << " has the following..."
                             << "\n\t# of Elements: " << num_elem_in_block
                             << "\n\t# of Nodes per Element: " << num_nodes_per_elem
@@ -133,7 +139,10 @@ namespace ExodusIO {
                     for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
                         // if (j) std::cout << ",";
                         if (j % num_nodes_per_elem == 0) { 
-                            if (passedIdx++ < startIdx) continue;
+                            if (passedIdx++ < startIdx) {
+                                j += num_nodes_per_elem - 1;
+                                continue;
+                            }
                             // std::cout << "[";
                             elementsIdx[elemIdx++] = nodeIdx;
                         }
@@ -153,20 +162,31 @@ namespace ExodusIO {
                 elementsIdx[elemIdx] = nodeIdx;
 
                 // TODO: Need to implement critical sections like OpenMP using MPI constructs
-                // if (Teuchos::rank() == 0) {
-                //     std::cout << "Indexing: {";
-                //     for (idx_t i = 0; i < params.num_elem + 1; i++) {
-                //         if (i) std::cout << ",";
-                //         std::cout << elementsIdx[i];
-                //     }
-                //     std::cout << "}" << std::endl;
-                //     std::cout << "Nodes: {";
-                //     for (idx_t i = 0; i < nodesInElements.size(); i++) {
-                //         if (i) std::cout << ",";
-                //         std::cout << nodesInElements[i];
-                //     }
-                //     std::cout << "}" << std::endl;
-                // }
+                std::stringstream ss;
+                ss << "Process #" << rank << std::endl; 
+                ss << "Indexing: {";
+                for (idx_t i = 0; i < params.num_elem + 1; i++) {
+                    if (i) ss << ",";
+                    ss << elementsIdx[i];
+                }
+                ss << "}" << std::endl;
+                ss << "Nodes: {";
+                for (idx_t i = 0; i < nodesInElements.size(); i++) {
+                    if (i) ss << ",";
+                    ss << nodesInElements[i];
+                }
+                ss << "}";
+
+                Teuchos::barrier(*comm);
+                for (int i = 0; i < ranks; i++) {
+                    if (i == rank) {
+                        std::cout << ss.str() << std::endl;
+                    }
+                    Teuchos::barrier(*comm);
+                }
+
+                return false;
+                /*
 
                 /////////////////////////////////////////////////////////////////////
                 // 2. Construct Dual Graph from Mesh
@@ -256,7 +276,7 @@ namespace ExodusIO {
                 Tpetra::Export<> exporter(currMap, newMap);
                 auto retmatrix = rcp(new Tpetra::CrsMatrix<>(newMap));
                 retmatrix->doExport(origMatrix, exporter, Tpetra::INSERT);
-                return retmatrix;
+                return retmatrix;*/
             }
 
             // Performs partitioning of the Exodus file specified in `open` and writes
@@ -318,6 +338,7 @@ namespace ExodusIO {
                         idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
                         for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i] = 0;
                         ex_get_elem_conn(readFID, ids[i], connect);
+                        for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i]--;
                         std::cout << "Block #" << i << ": {";
                         for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
                             if (j) std::cout << ",";
@@ -356,6 +377,7 @@ namespace ExodusIO {
                 idx_t ncommon = 1;
                 idx_t nparts = partitions;
                 real_t *tpwgts = nullptr;
+                /* TODO: Set Options METIS_OPTION_NUMBERING */
                 idx_t *options = nullptr;
                 idx_t objval = 0;
                 idx_t *epart = new idx_t[ne];
@@ -537,8 +559,8 @@ namespace ExodusIO {
                     for (idx_t elemIdx : elembin[i]) {
                         std::cout << "[ ";
                         for (idx_t j = elementsIdx[elemIdx]; j < elementsIdx[elemIdx+1]; j++) {
-                            connect[idx++] = nodesInElements[j];
-                            std::cout << nodesInElements[j] << " ";
+                            connect[idx++] = nodesInElements[j]+1;
+                            std::cout << nodesInElements[j]+1 << " ";
                         }
                         std::cout << "]";
                     }
@@ -725,7 +747,7 @@ namespace ExodusIO {
                     delete[] info[i];
                 }
 
-                constructTPetra(npart, nn, epart, eptr, eind, ne);
+                // constructTPetra(npart, nn, epart, eptr, eind, ne);
 
                 return true;
             }
@@ -744,43 +766,43 @@ namespace ExodusIO {
             int readFID = -1;
             int writeFID = -1;
 
-            void constructTPetra(idx_t *npart, idx_t nparts, idx_t *epart, idx_t *eptr, idx_t *eind, idx_t num_elems) {
-                typedef Tpetra::Map<> map_type;
-                typedef Tpetra::Vector<>::scalar_type scalar_type;
-                typedef Tpetra::Vector<>::local_ordinal_type local_ordinal_type;
-                typedef Tpetra::Vector<>::global_ordinal_type global_ordinal_type;
-                typedef Tpetra::Vector<>::mag_type magnitude_type;
-                typedef Tpetra::CrsMatrix<> crs_matrix_type;
+            // void constructTPetra(idx_t *npart, idx_t nparts, idx_t *epart, idx_t *eptr, idx_t *eind, idx_t num_elems) {
+            //     typedef Tpetra::Map<> map_type;
+            //     typedef Tpetra::Vector<>::scalar_type scalar_type;
+            //     typedef Tpetra::Vector<>::local_ordinal_type local_ordinal_type;
+            //     typedef Tpetra::Vector<>::global_ordinal_type global_ordinal_type;
+            //     typedef Tpetra::Vector<>::mag_type magnitude_type;
+            //     typedef Tpetra::CrsMatrix<> crs_matrix_type;
 
-                using Teuchos::RCP;
-                using Teuchos::rcp;
-                using Teuchos::Array;
-                using Teuchos::ArrayView;
+            //     using Teuchos::RCP;
+            //     using Teuchos::rcp;
+            //     using Teuchos::Array;
+            //     using Teuchos::ArrayView;
 
-                auto comm = Tpetra::getDefaultComm();
-                int rank = comm->getRank();
-                // Gather # of local indices
-                idx_t num_local_elems = 0;
-                for (idx_t i = 0; i < num_elems; i++) {
-                    if (epart[i] == rank) {
-                        num_local_elems++;
-                    }
-                }
-                Array<global_ordinal_type> elementList (num_local_elems);
-                idx_t idx = 0;
-                for (idx_t i = 0; i < num_elems; i++) {
-                    if (epart[i] == rank) {
-                        elementList[idx++] = i;
-                    }
-                }
-                for (Array<global_ordinal_type>::size_type i = 0; i < num_elems; i++) {
-                   elementList[i] = epart[i];
-                }
+            //     auto comm = Tpetra::getDefaultComm();
+            //     int rank = comm->getRank();
+            //     // Gather # of local indices
+            //     idx_t num_local_elems = 0;
+            //     for (idx_t i = 0; i < num_elems; i++) {
+            //         if (epart[i] == rank) {
+            //             num_local_elems++;
+            //         }
+            //     }
+            //     Array<global_ordinal_type> elementList (num_local_elems);
+            //     idx_t idx = 0;
+            //     for (idx_t i = 0; i < num_elems; i++) {
+            //         if (epart[i] == rank) {
+            //             elementList[idx++] = i;
+            //         }
+            //     }
+            //     for (Array<global_ordinal_type>::size_type i = 0; i < num_elems; i++) {
+            //        elementList[i] = epart[i];
+            //     }
 
-                // Row map consists of Elements; Column map consists of Nodes that comprise the element
-                RCP<const map_type> rowmap = rcp(new map_type(num_elems, elementList, 0, Tpetra::getDefaultComm()));
-                RCP<const map_type> colmap = Tpetra::Details::makeColMap();
-                // auto matrix = crs_matrix_type();
-            }
+            //     // Row map consists of Elements; Column map consists of Nodes that comprise the element
+            //     RCP<const map_type> rowmap = rcp(new map_type(num_elems, elementList, 0, Tpetra::getDefaultComm()));
+            //     RCP<const map_type> colmap = Tpetra::Details::makeColMap();
+            //     // auto matrix = crs_matrix_type();
+            // }
     };
 };

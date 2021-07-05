@@ -16,11 +16,12 @@ TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgori
 CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address"
 
 # Build Examples
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS Example1.cc -o exec/Example1
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS Example2.cc -o exec/Example2
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS Example3.cc -o exec/Example3
+# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS $CCFLAGS Example1.cc -o exec/Example1
+# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS $CCFLAGS Example2.cc -o exec/Example2
+# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS $CCFLAGS Example3.cc -o exec/Example3
 # mpic++ -I$TRILINOS_INCLUDE -I$PARMETIS_INCLUDE -L$TRILINOS_LIB -L$PARMETIS_LIB $CCFLAGS $TRILINOS_LDFLAGS $PARMETIS_LDFLAGS Example4.cc -o exec/Example4
 # mpic++ -I$TRILINOS_INCLUDE -I$PARMETIS_INCLUDE -L$TRILINOS_LIB -L$PARMETIS_LIB $CCFLAGS $TRILINOS_LDFLAGS $PARMETIS_LDFLAGS SimpleExampleImpl.cc -o exec/SimpleExampleImpl
-mpic++ -Wall -lexodus -lmetis -I$EXODUSII_INCLUDE -L$EXODUSII_LIB -I$METIS_INCLUDE -L$METIS_LIB $CCFLAGS ExodusIOTest.cpp -o exec/ExodusIOTest
-install_name_tool -change libmetis.dylib /usr/local/lib/libmetis.dylib exec/ExodusIOTest
-g++-11 -Wall -lexodus -I/usr/local/Cellar/open-mpi/4.1.1_2/include/ -I$NETCDF_INCLUDE -I$EXODUSII_INCLUDE -L$EXODUSII_LIB $CCFLAGS ExodusMWE.cpp -o exec/ExodusMWE
+# mpic++ -I$EXODUSII_INCLUDE -L$EXODUSII_LIB -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -L$METIS_LIB $PARMETIS_LDFLAGS -I$PARMETIS_INCLUDE $CCFLAGS -Wall -lexodus ExodusIOTest.cpp -o exec/ExodusIOTest
+# install_name_tool -change libmetis.dylib /usr/local/lib/libmetis.dylib exec/ExodusIOTest
+# g++-11 -Wall -lexodus -I/usr/local/Cellar/open-mpi/4.1.1_2/include/ -I$NETCDF_INCLUDE -I$EXODUSII_INCLUDE -L$EXODUSII_LIB $CCFLAGS ExodusMWE.cpp -o exec/ExodusMWE
+mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -Wall -lexodus ExodusIOTest.cpp -o exec/ExodusIOTest
