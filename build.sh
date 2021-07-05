@@ -24,4 +24,4 @@ CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address"
 # mpic++ -I$EXODUSII_INCLUDE -L$EXODUSII_LIB -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -L$METIS_LIB $PARMETIS_LDFLAGS -I$PARMETIS_INCLUDE $CCFLAGS -Wall -lexodus ExodusIOTest.cpp -o exec/ExodusIOTest
 # install_name_tool -change libmetis.dylib /usr/local/lib/libmetis.dylib exec/ExodusIOTest
 # g++-11 -Wall -lexodus -I/usr/local/Cellar/open-mpi/4.1.1_2/include/ -I$NETCDF_INCLUDE -I$EXODUSII_INCLUDE -L$EXODUSII_LIB $CCFLAGS ExodusMWE.cpp -o exec/ExodusMWE
-mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -Wall -lexodus ExodusIOTest.cpp -o exec/ExodusIOTest
+mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -Wall -lexodus -lparmetis ExodusIOTest.cpp -o exec/ExodusIOTest

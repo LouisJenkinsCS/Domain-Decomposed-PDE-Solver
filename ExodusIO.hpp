@@ -185,8 +185,6 @@ namespace ExodusIO {
                     Teuchos::barrier(*comm);
                 }
 
-                return false;
-                /*
 
                 /////////////////////////////////////////////////////////////////////
                 // 2. Construct Dual Graph from Mesh
@@ -203,13 +201,28 @@ namespace ExodusIO {
                 // indices [startIdx, endIdx) contains the elements distributed over this process.
                 // Each process must have the same elemdist, and so must also compute the indices for
                 // all other MPI processes... TODO
-                idx_t *elemdist = new idx_t[params.num_elem];
+                idx_t *elemdist = new idx_t[ranks+1];
+                elemdist[0] = 0;
+                for (int i = 1; i <= ranks; i++) {
+                    elemdist[i] = elemdist[i-1] + params.num_elem / ranks;
+                }
+                elemdist[ranks] = params.num_elem;
+
+                if (rank == 0) {
+                    std::cout << "Element Distribution: {" << std::endl;
+                    int pid = 0;
+                    for (int i = 1; i <= ranks; i++) {
+                        std::cout << "\tProcess #" << pid++ << " owns " << elemdist[i-1] << " to " << elemdist[i]-1 << std::endl;
+                    }
+                    std::cout << "}" << std::endl;
+                }
+
                 idx_t *eptr = elementsIdx;
                 idx_t *eind = nodesInElements.data();
                 idx_t numflag = 0; // 0-based indexing (C-style)
                 idx_t ncommonnodes = 1;
                 idx_t *xadj, *adjncy;
-                MPI_Comm comm = MPI_COMM_WORLD;
+                MPI_Comm mpicomm = MPI_COMM_WORLD;
 
                 // Note: We are assuming that there is only one Element Type in this mesh...
                 if (strncmp(elemtype, "TETRA", 5) == 0) {
@@ -223,12 +236,37 @@ namespace ExodusIO {
                     return false;
                 }
                 // std::cout << "Calling METIS_PartMeshNodal with " << nparts << " partitions." << std::endl;
-                int retval = ParMETIS_V3_Mesh2Dual(elemdist, eptr, eind, &numflag, &ncommonnodes, &xadj, &adjncy, &comm);
+                int retval = ParMETIS_V3_Mesh2Dual(elemdist, eptr, eind, &numflag, &ncommonnodes, &xadj, &adjncy, &mpicomm);
                 if (retval != METIS_OK) {
                     std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR")) << std::endl;
                     return false;
                 }
 
+                ss.str("");
+                ss << "Process #" << rank << std::endl;
+                ss << "xadj: {";
+                for (int i = 0; i < elemdist[rank+1] - elemdist[rank]; i++) {
+                    if (i) ss << ",";
+                    ss << xadj[i];
+                }
+                ss << "}" << std::endl;
+                ss << "adjncy: {";
+                for (int i = 0; i < xadj[elemdist[rank+1] - elemdist[rank] - 1]; i++) {
+                    if (i) ss << ",";
+                    ss << adjncy[i];
+                }
+                ss << "}" << std::endl;
+
+                Teuchos::barrier(*comm);
+                for (int i = 0; i < ranks; i++) {
+                    if (i == rank) {
+                        std::cout << ss.str() << std::endl;
+                    }
+                    Teuchos::barrier(*comm);
+                }
+
+                return false;
+                /*
                 /////////////////////////////////////////////////////////////////////
                 // 3. Construct Tpetra Map of current distribution of dual graph...
                 /////////////////////////////////////////////////////////////////////
