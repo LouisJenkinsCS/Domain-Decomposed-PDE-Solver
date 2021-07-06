@@ -2,6 +2,7 @@
 #include <Tpetra_Core.hpp>
 #include <Tpetra_Vector.hpp>
 #include <Tpetra_CrsMatrix.hpp>
+#include <Teuchos_VerboseObject.hpp>
 
 #include "exodusII.h"
 #include <string>
@@ -207,6 +208,7 @@ namespace ExodusIO {
                     elemdist[i] = elemdist[i-1] + params.num_elem / ranks;
                 }
                 elemdist[ranks] = params.num_elem;
+                idx_t numVertices = elemdist[rank+1] - elemdist[rank];
 
                 if (rank == 0) {
                     std::cout << "Element Distribution: {" << std::endl;
@@ -245,13 +247,13 @@ namespace ExodusIO {
                 ss.str("");
                 ss << "Process #" << rank << std::endl;
                 ss << "xadj: {";
-                for (int i = 0; i < elemdist[rank+1] - elemdist[rank]; i++) {
+                for (int i = 0; i <= numVertices; i++) {
                     if (i) ss << ",";
                     ss << xadj[i];
                 }
                 ss << "}" << std::endl;
                 ss << "adjncy: {";
-                for (int i = 0; i < xadj[elemdist[rank+1] - elemdist[rank] - 1]; i++) {
+                for (int i = 0; i < xadj[numVertices - 1]; i++) {
                     if (i) ss << ",";
                     ss << adjncy[i];
                 }
@@ -265,23 +267,49 @@ namespace ExodusIO {
                     Teuchos::barrier(*comm);
                 }
 
-                return false;
-                /*
                 /////////////////////////////////////////////////////////////////////
                 // 3. Construct Tpetra Map of current distribution of dual graph...
                 /////////////////////////////////////////////////////////////////////
 
-                auto tcomm = Tpetra::getDefaultComm();
-                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, endIdx - startIdx, 0, *tcomm));
+                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(numVertices);
+                int idx = 0;
+                for (int i = elemdist[rank]; i < elemdist[rank+1]; i++) {
+                    indices[idx++] = i;
+                }
+                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, indices, 0, comm));
+                auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
 
                 /////////////////////////////////////////////////////////////////////
                 // 4. Construct Tpetra CrsMatrix over Tpetra Map for dual graph
                 /////////////////////////////////////////////////////////////////////
                 
-                auto origMatrix = Teuchos::rcp(new Tpetra::CrsMatrix<>(currMap, 0));
+                size_t maxNumEntriesPerRow = 0;
+                for (int i = 0; i < numVertices; i++) {
+                    maxNumEntriesPerRow = std::max(maxNumEntriesPerRow, (size_t) (xadj[i+1] - xadj[i]));
+                }
+                auto origMatrix = Teuchos::rcp(new Tpetra::CrsMatrix<>(currMap, maxNumEntriesPerRow));
+                
+                // Add elements from adjncy to origMatrix
+                for (int i = 0; i < numVertices; i++) {
+                    const int numEntries = xadj[i+1] - xadj[i];
+                    Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(numEntries);
+                    Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(numEntries);
+                    for (int j = 0; j < numEntries; j++) {
+                        cols[j] = adjncy[xadj[i] + j];
+                        vals[j] = 1;
+                    }
+                    origMatrix->insertGlobalValues(adjncy[xadj[i]], cols, vals);
+                }
+
+
+                origMatrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                return false;
+
                 // Move data into matrix...
                 // TODO
 
+                /*
                 /////////////////////////////////////////////////////////////////////
                 // 5. Partition Dual Graph to obtain new partition
                 /////////////////////////////////////////////////////////////////////
