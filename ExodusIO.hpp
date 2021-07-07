@@ -279,6 +279,7 @@ namespace ExodusIO {
                 auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, indices, 0, comm));
                 auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
                 currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                assert(currMap->isOneToOne());
 
                 /////////////////////////////////////////////////////////////////////
                 // 4. Construct Tpetra CrsMatrix over Tpetra Map for dual graph
@@ -299,11 +300,22 @@ namespace ExodusIO {
                         cols[j] = adjncy[xadj[i] + j];
                         vals[j] = 1;
                     }
-                    origMatrix->insertGlobalValues(adjncy[xadj[i]], cols, vals);
+                    origMatrix->insertGlobalValues(elemdist[rank] + i, cols, vals);
                 }
 
+                origMatrix->fillComplete(currMap, currMap);
+                origMatrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_MEDIUM);
+                Teuchos::barrier(*comm);
 
-                origMatrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                for (int i = 0; i < ranks; i++) {
+                    if (i == rank) {
+                        std::cout << "Process #" << rank << ": isGloballyIndexed() = " << origMatrix->isGloballyIndexed() << ", isDistributed() = " << origMatrix->isDistributed() << std::endl;
+                        auto lclmtx = origMatrix->getLocalMatrix();
+                        std::cout << "NNZ: " << lclmtx.nnz() << std::endl;
+                    }
+                    Teuchos::barrier(*comm);
+                }
+
                 return false;
 
                 // Move data into matrix...
