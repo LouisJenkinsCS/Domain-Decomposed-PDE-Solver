@@ -237,7 +237,6 @@ namespace ExodusIO {
                     std::cerr << "Currently unsupported element type for mesh: " << elemtype << std::endl;
                     return false;
                 }
-                // std::cout << "Calling METIS_PartMeshNodal with " << nparts << " partitions." << std::endl;
                 int retval = ParMETIS_V3_Mesh2Dual(elemdist, eptr, eind, &numflag, &ncommonnodes, &xadj, &adjncy, &mpicomm);
                 if (retval != METIS_OK) {
                     std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR")) << std::endl;
@@ -278,6 +277,7 @@ namespace ExodusIO {
                 }
                 auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, indices, 0, comm));
                 auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                Teuchos::barrier(*comm);
                 currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                 assert(currMap->isOneToOne());
 
@@ -316,41 +316,122 @@ namespace ExodusIO {
                     Teuchos::barrier(*comm);
                 }
 
-                return false;
 
-                // Move data into matrix...
-                // TODO
-
-                /*
                 /////////////////////////////////////////////////////////////////////
                 // 5. Partition Dual Graph to obtain new partition
                 /////////////////////////////////////////////////////////////////////
 
-                idx_t *vtxdist = new idx_t[params.num_elem];
-                idx_t *vwgt, *adjwgt = nullptr; // Unweighted
+                idx_t *vtxdist = elemdist;
+                idx_t *vwgt = nullptr, *adjwgt = nullptr; // Unweighted
                 idx_t wgtflag = 0; // Unweighted
-                idx_t numflag = 0; // 0-based indexing (C-style)
+                numflag = 0; // 0-based indexing (C-style)
                 // Note: If Segfault occurs, try setting ncon=1 and just make uniform
-                idx_t ncon = 0; // # of weights per vertex is 0
-                real_t *tpwgts = nullptr;
-                real_t *ubvec = nullptr;
-                idx_t *options = nullptr; // May segfault?
+                idx_t ncon = 1; // # of weights per vertex is 0
+                real_t tpwgts[ranks];
+                for (int i = 0; i < ranks; i++) tpwgts[i] = 1.0 / ranks;
+                real_t ubvec[1];
+                ubvec[0] = 1.05;
+                idx_t options[3]; // May segfault?
+                options[0] = 0;
                 idx_t edgecut = 0;
-                idx_t *part = new idx_t[num_vertices];
+                idx_t *part = new idx_t[numVertices];
 
-
-                retval = ParMETIS_V3_PartKway(vtxdist, xadj, adjncy, vwgt, adjwgt, &wgtflag, &numflag, &ncon, &nparts, tpwgts, ubvec, options, &edgecut, part, &comm);
+                retval = ParMETIS_V3_PartKway(vtxdist, xadj, adjncy, vwgt, adjwgt, &wgtflag, &numflag, &ncon, (idx_t *) &ranks, tpwgts, ubvec, options, &edgecut, part, &mpicomm);
                 if (retval != METIS_OK) {
                     std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR")) << std::endl;
                     return false;
                 }
-                // TODO: Use MPI to communicate the vtxdist
 
+                if (rank == 0) std::cout << "Edgecut = " << edgecut << std::endl;
+
+                std::vector<idx_t> redistribute[ranks];
+                for (int i = 0; i < ranks; i++) {
+                    if (rank == i) {                        
+                        // Collect vertices by global index to be redistributed to other processes
+                        // for debugging purposes...
+                        for (int j = 0; j < numVertices; j++) {
+                            redistribute[part[j]].push_back(elemdist[rank] + j);
+                        }
+                        for (int j = 0; j < ranks; j++) {
+                            if (j == rank) {
+                                std::cout << "Process #" << j << "(" << redistribute[j].size() << "): {";
+                            } else {
+                                std::cout << "Process #" << rank << " -> Process #" << j << "(" << redistribute[j].size() << "): {";
+                            }
+                            for (int k = 0; k < redistribute[j].size(); k++) {
+                                if (k) std::cout << ",";
+                                std::cout << redistribute[j][k];
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                    }
+                    Teuchos::barrier(*comm);
+                }
+                
+                // Perform an All-To-All Exchange for each MPI Process
+                // Each process needs to get its new indices to construct the new map.
+                // Fetch each other process' sizes
+                MPI_Request request[2 * ranks - 2];
+                MPI_Status status[2 * ranks - 2];
+                int64_t buflen[ranks];
+                buflen[rank] = redistribute[rank].size();
+                idx = 0;
+                for (int i = 0; i < ranks; i++) {
+                    if (rank == i) {
+                        continue;
+                    }
+                    size_t len = redistribute[i].size();
+                    MPI_Isend(&len, 1, MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                    MPI_Irecv(&buflen[i], 1, MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                }
+                if (MPI_Waitall(2 * ranks - 2, request, status) != MPI_SUCCESS) {
+                    std::cerr << "Unable to pass sizes between processes!!! MPI_Waitall failure!" << std::endl;
+                    return false;
+                }
+
+                int64_t total = 0;
+                for (int i = 0; i < ranks; i++) total += buflen[i];
+                for (int i = 0; i < ranks; i++) {
+                    if (rank == i) {
+                        std::cout << "Process #" << rank << " has " << total << " entries!" << std::endl;
+                    }
+                    Teuchos::barrier(*comm);
+                }
+
+                // Gather all entries to be sent to other MPI processes
+                idx_t **buf = new idx_t*[ranks];
+                idx = 0;
+                for (int i = 0; i < ranks; i++) {
+                    if (rank == i) {
+                        buf[i] = redistribute[rank].data();
+                    } else {
+                        buf[i] = new idx_t[buflen[i]];
+                        MPI_Isend(redistribute[i].data(), redistribute[i].size(), sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                        MPI_Irecv(buf[i], buflen[i], sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                    }
+                }
+                if (MPI_Waitall(2 * ranks - 2, request, status) != MPI_SUCCESS) {
+                    std::cerr << "Unable to pass buffers between processes!!! MPI_Waitall failure!" << std::endl;
+                    return false;
+                }
+                
                 /////////////////////////////////////////////////////////////////////
                 // 6. Use Tpetra::Export to redistribute the data to the new distribution
                 //    provided by ParMETIS
                 /////////////////////////////////////////////////////////////////////
-                
+                return false;
+                /* 
+                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(numVertices);
+                int idx = 0;
+                for (int i = elemdist[rank]; i < elemdist[rank+1]; i++) {
+                    indices[idx++] = i;
+                }
+                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, indices, 0, comm));
+                auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                Teuchos::barrier(*comm);
+                currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                assert(currMap->isOneToOne());
+
                 Tpetra::Export<> exporter(currMap, newMap);
                 auto retmatrix = rcp(new Tpetra::CrsMatrix<>(newMap));
                 retmatrix->doExport(origMatrix, exporter, Tpetra::INSERT);
