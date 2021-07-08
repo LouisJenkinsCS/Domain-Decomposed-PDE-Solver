@@ -162,7 +162,6 @@ namespace ExodusIO {
                 }
                 elementsIdx[elemIdx] = nodeIdx;
 
-                // TODO: Need to implement critical sections like OpenMP using MPI constructs
                 std::stringstream ss;
                 ss << "Process #" << rank << std::endl; 
                 ss << "Indexing: {";
@@ -196,12 +195,11 @@ namespace ExodusIO {
                 // and the nodes in each element is 1/P starting at some index after the last process and before
                 // the next process. Each process is reading in the Exodus file, and hence can just ignore the parts
                 // of the process they do not care about.
-                // TODO
 
                 // Distribution of elements; scheme used is a simple block distribution, where
                 // indices [startIdx, endIdx) contains the elements distributed over this process.
                 // Each process must have the same elemdist, and so must also compute the indices for
-                // all other MPI processes... TODO
+                // all other MPI processes...
                 idx_t *elemdist = new idx_t[ranks+1];
                 elemdist[0] = 0;
                 for (int i = 1; i <= ranks; i++) {
@@ -265,7 +263,7 @@ namespace ExodusIO {
                     }
                     Teuchos::barrier(*comm);
                 }
-
+                
                 /////////////////////////////////////////////////////////////////////
                 // 3. Construct Tpetra Map of current distribution of dual graph...
                 /////////////////////////////////////////////////////////////////////
@@ -419,23 +417,31 @@ namespace ExodusIO {
                 // 6. Use Tpetra::Export to redistribute the data to the new distribution
                 //    provided by ParMETIS
                 /////////////////////////////////////////////////////////////////////
-                return false;
-                /* 
-                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(numVertices);
-                int idx = 0;
-                for (int i = elemdist[rank]; i < elemdist[rank+1]; i++) {
-                    indices[idx++] = i;
+                
+                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> finalIndices(total);
+                idx = 0;
+                for (int i = 0; i < ranks; i++) {
+                    for (int j = 0; j < buflen[i]; j++) {
+                        finalIndices[idx++] = buf[i][j];
+                    }
                 }
-                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, indices, 0, comm));
-                auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                auto newMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, finalIndices, 0, comm));
                 Teuchos::barrier(*comm);
                 currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                 assert(currMap->isOneToOne());
 
+                // Compute the global maximum number of entries per row for construction of new map...
+                size_t globalMaxNumEntriesPerRow = 0;
+                MPI_Allreduce(&maxNumEntriesPerRow, &globalMaxNumEntriesPerRow, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+
                 Tpetra::Export<> exporter(currMap, newMap);
-                auto retmatrix = rcp(new Tpetra::CrsMatrix<>(newMap));
-                retmatrix->doExport(origMatrix, exporter, Tpetra::INSERT);
-                return retmatrix;*/
+                auto retmatrix = rcp(new Tpetra::CrsMatrix<>(newMap, globalMaxNumEntriesPerRow));
+                retmatrix->doExport(*origMatrix, exporter, Tpetra::INSERT);
+                retmatrix->fillComplete(newMap, newMap);
+                retmatrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_MEDIUM);
+                Teuchos::barrier(*comm);
+                *ret = retmatrix;
+                return true;
             }
 
             // Performs partitioning of the Exodus file specified in `open` and writes
@@ -741,7 +747,7 @@ namespace ExodusIO {
                     assert(!ex_put_set_param(writeFID, EX_NODE_SET, ids[i], num_nodes_in_set, num_df_in_set));
                     
                     idx_t *node_list = new idx_t[num_nodes_in_set];
-                    real_t *dist_fact = new real_t[num_nodes_in_set];\
+                    real_t *dist_fact = new real_t[num_nodes_in_set];
 
                 
                     assert(!ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL));
