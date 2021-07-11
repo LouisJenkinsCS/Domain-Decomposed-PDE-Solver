@@ -12,7 +12,6 @@ int main(int argc, char *argv[]) {
         cmdp.setOption("output", &outputFile, "Decomposed output derived from input file");
         cmdp.setOption("verbose", "no-verbose", &verbose, "Whether or not to be verbose with output (usefulf or debugging) [default=false]");
         cmdp.parse(argc, argv);
-        ExodusIO::IO io;
         auto comm = Tpetra::getDefaultComm();
         int rank = Teuchos::rank(*comm);
         if (inputFile.empty()) {
@@ -39,7 +38,7 @@ int main(int argc, char *argv[]) {
         }
 
         auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
-        ret->describe(*ostr, verbose ? Teuchos::EVerbosityLevel::VERB_EXTREME ? Teuchos::EVerbosityLevel::VERB_MEDIUM);
+        ret->describe(*ostr, verbose ? Teuchos::EVerbosityLevel::VERB_EXTREME : Teuchos::EVerbosityLevel::VERB_MEDIUM);
     }
 
     return 0;

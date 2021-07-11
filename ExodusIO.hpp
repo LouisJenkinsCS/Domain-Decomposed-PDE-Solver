@@ -98,8 +98,10 @@ namespace ExodusIO {
                     std::cerr << "Rank #" << Teuchos::rank(*comm) << ": " << "Failed to call `ex_get_ids`" << std::endl;
                     return false;
                 }
-                for (int i = 0; i < params.num_elem_blk; i++) {
-                    std::cout << "Rank #" << Teuchos::rank(*comm) << ": " << "Element Block Id: " << (int) ids[i] << std::endl;
+                if (verbose) {
+                    for (int i = 0; i < params.num_elem_blk; i++) {
+                        std::cout << "Rank #" << Teuchos::rank(*comm) << ": " << "Element Block Id: " << (int) ids[i] << std::endl;
+                    }
                 }
                 idx_t elementsIdx[params.num_elem + 1];
                 for (int i = 0; i < params.num_elem + 1; i++) elementsIdx[i] = 0;
