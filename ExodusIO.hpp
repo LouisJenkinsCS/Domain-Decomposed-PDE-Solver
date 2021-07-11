@@ -61,7 +61,7 @@ namespace ExodusIO {
             // Reads in the partitioning of the Exodus file specified in `open` and calls
             // ParMETIS to construct a dual graph; this dual graph is then partitioned
             // and redistributed/balanced across the appropriate number of processes.
-            bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret) {
+            bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret, bool verbose=false) {
                 auto comm = Tpetra::getDefaultComm();
                 auto rank = Teuchos::rank(*comm);
                 auto ranks = Teuchos::size(*comm);
@@ -76,7 +76,7 @@ namespace ExodusIO {
                 if (ex_get_init_ext(readFID,&params)) {
                     return false;
                 }
-                if (rank == 0) {
+                if (rank == 0 && verbose) {
                     std::cout << "Title: " << params.title << "\n# of Dimensions: " << params.num_dim  << "\n# of Blobs: " << params.num_blob << "\n# of Assembly: " << params.num_assembly
                         << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
                         << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
@@ -123,7 +123,7 @@ namespace ExodusIO {
                         std::cerr << "Rank #" << rank << ": " << "Failed to `ex_get_block` element block " << i+1 << " of " << params.num_elem_blk << " with id " << ids[i] << std::endl;
                         return false;
                     }
-                    if (rank == 0) {
+                    if (rank == 0 && verbose) {
                         std::cout << "Block #" << i << " has the following..."
                             << "\n\t# of Elements: " << num_elem_in_block
                             << "\n\t# of Nodes per Element: " << num_nodes_per_elem
@@ -136,53 +136,46 @@ namespace ExodusIO {
                     idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
                     for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i] = 0;
                     ex_get_elem_conn(readFID, ids[i], connect);
-                    // std::cout << "Block #" << i << ": {";
                     for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
-                        // if (j) std::cout << ",";
                         if (j % num_nodes_per_elem == 0) { 
                             if (passedIdx++ < startIdx) {
                                 j += num_nodes_per_elem - 1;
                                 continue;
                             }
-                            // std::cout << "[";
                             elementsIdx[elemIdx++] = nodeIdx;
                         }
-                        // std::cout << connect[j];
                         nodesInElements.push_back(connect[j]);
                         nodeIdx++;
                         
                         // End of Element Block
                         if ((j+1) % num_nodes_per_elem == 0) {
                             if (passedIdx == endIdx) break;
-                            // std::cout << "]";
                         }
                     }
-                    // std::cout << "}" << std::endl;
                     delete[] connect;
                 }
                 elementsIdx[elemIdx] = nodeIdx;
 
-                std::stringstream ss;
-                ss << "Process #" << rank << std::endl; 
-                ss << "Indexing: {";
-                for (idx_t i = 0; i < params.num_elem + 1; i++) {
-                    if (i) ss << ",";
-                    ss << elementsIdx[i];
-                }
-                ss << "}" << std::endl;
-                ss << "Nodes: {";
-                for (idx_t i = 0; i < nodesInElements.size(); i++) {
-                    if (i) ss << ",";
-                    ss << nodesInElements[i];
-                }
-                ss << "}";
-
-                Teuchos::barrier(*comm);
-                for (int i = 0; i < ranks; i++) {
-                    if (i == rank) {
-                        std::cout << ss.str() << std::endl;
-                    }
+                if (verbose) {
                     Teuchos::barrier(*comm);
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << std::endl; 
+                            std::cout << "Indexing: {";
+                            for (idx_t i = 0; i < params.num_elem + 1; i++) {
+                                if (i) std::cout << ",";
+                                std::cout << elementsIdx[i];
+                            }
+                            std::cout << "}" << std::endl;
+                            std::cout << "Nodes: {";
+                            for (idx_t i = 0; i < nodesInElements.size(); i++) {
+                                if (i) std::cout << ",";
+                                std::cout << nodesInElements[i];
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
                 }
 
 
@@ -208,7 +201,7 @@ namespace ExodusIO {
                 elemdist[ranks] = params.num_elem;
                 idx_t numVertices = elemdist[rank+1] - elemdist[rank];
 
-                if (rank == 0) {
+                if (rank == 0 && verbose) {
                     std::cout << "Element Distribution: {" << std::endl;
                     int pid = 0;
                     for (int i = 1; i <= ranks; i++) {
@@ -240,28 +233,27 @@ namespace ExodusIO {
                     std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR")) << std::endl;
                     return false;
                 }
-
-                ss.str("");
-                ss << "Process #" << rank << std::endl;
-                ss << "xadj: {";
-                for (int i = 0; i <= numVertices; i++) {
-                    if (i) ss << ",";
-                    ss << xadj[i];
-                }
-                ss << "}" << std::endl;
-                ss << "adjncy: {";
-                for (int i = 0; i < xadj[numVertices - 1]; i++) {
-                    if (i) ss << ",";
-                    ss << adjncy[i];
-                }
-                ss << "}" << std::endl;
-
-                Teuchos::barrier(*comm);
-                for (int i = 0; i < ranks; i++) {
-                    if (i == rank) {
-                        std::cout << ss.str() << std::endl;
-                    }
+                
+                if (verbose) {
                     Teuchos::barrier(*comm);
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << std::endl;
+                            std::cout << "xadj: {";
+                            for (int i = 0; i <= numVertices; i++) {
+                                if (i) std::cout << ",";
+                                std::cout << xadj[i];
+                            }
+                            std::cout << "}" << std::endl;
+                            std::cout << "adjncy: {";
+                            for (int i = 0; i < xadj[numVertices - 1]; i++) {
+                                if (i) std::cout << ",";
+                                std::cout << adjncy[i];
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
                 }
                 
                 /////////////////////////////////////////////////////////////////////
@@ -274,9 +266,11 @@ namespace ExodusIO {
                     indices[idx++] = i;
                 }
                 auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, indices, 0, comm));
-                auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
-                Teuchos::barrier(*comm);
-                currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    Teuchos::barrier(*comm);
+                    currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                }
                 assert(currMap->isOneToOne());
 
                 /////////////////////////////////////////////////////////////////////
@@ -302,16 +296,19 @@ namespace ExodusIO {
                 }
 
                 origMatrix->fillComplete(currMap, currMap);
-                origMatrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_MEDIUM);
-                Teuchos::barrier(*comm);
-
-                for (int i = 0; i < ranks; i++) {
-                    if (i == rank) {
-                        std::cout << "Process #" << rank << ": isGloballyIndexed() = " << origMatrix->isGloballyIndexed() << ", isDistributed() = " << origMatrix->isDistributed() << std::endl;
-                        auto lclmtx = origMatrix->getLocalMatrix();
-                        std::cout << "NNZ: " << lclmtx.nnz() << std::endl;
-                    }
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    origMatrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_MEDIUM);
+                    
                     Teuchos::barrier(*comm);
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << ": isGloballyIndexed() = " << origMatrix->isGloballyIndexed() << ", isDistributed() = " << origMatrix->isDistributed() << std::endl;
+                            auto lclmtx = origMatrix->getLocalMatrix();
+                            std::cout << "NNZ: " << lclmtx.nnz() << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
                 }
 
 
@@ -340,30 +337,31 @@ namespace ExodusIO {
                     return false;
                 }
 
-                if (rank == 0) std::cout << "Edgecut = " << edgecut << std::endl;
+                if (rank == 0 && verbose) std::cout << "Edgecut = " << edgecut << std::endl;
 
                 std::vector<idx_t> redistribute[ranks];
                 for (int i = 0; i < ranks; i++) {
                     if (rank == i) {                        
-                        // Collect vertices by global index to be redistributed to other processes
-                        // for debugging purposes...
+                        // Collect vertices by global index to be redistributed to other processes...
                         for (int j = 0; j < numVertices; j++) {
                             redistribute[part[j]].push_back(elemdist[rank] + j);
                         }
-                        for (int j = 0; j < ranks; j++) {
-                            if (j == rank) {
-                                std::cout << "Process #" << j << "(" << redistribute[j].size() << "): {";
-                            } else {
-                                std::cout << "Process #" << rank << " -> Process #" << j << "(" << redistribute[j].size() << "): {";
+                        if (verbose) {
+                            for (int j = 0; j < ranks; j++) {
+                                if (j == rank) {
+                                    std::cout << "Process #" << j << "(" << redistribute[j].size() << "): {";
+                                } else {
+                                    std::cout << "Process #" << rank << " -> Process #" << j << "(" << redistribute[j].size() << "): {";
+                                }
+                                for (int k = 0; k < redistribute[j].size(); k++) {
+                                    if (k) std::cout << ",";
+                                    std::cout << redistribute[j][k];
+                                }
+                                std::cout << "}" << std::endl;
                             }
-                            for (int k = 0; k < redistribute[j].size(); k++) {
-                                if (k) std::cout << ",";
-                                std::cout << redistribute[j][k];
-                            }
-                            std::cout << "}" << std::endl;
                         }
                     }
-                    Teuchos::barrier(*comm);
+                    if (verbose) Teuchos::barrier(*comm);
                 }
                 
                 // Perform an All-To-All Exchange for each MPI Process
@@ -389,11 +387,13 @@ namespace ExodusIO {
 
                 int64_t total = 0;
                 for (int i = 0; i < ranks; i++) total += buflen[i];
-                for (int i = 0; i < ranks; i++) {
-                    if (rank == i) {
-                        std::cout << "Process #" << rank << " has " << total << " entries!" << std::endl;
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) {
+                            std::cout << "Process #" << rank << " has " << total << " entries!" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
                     }
-                    Teuchos::barrier(*comm);
                 }
 
                 // Gather all entries to be sent to other MPI processes
@@ -426,8 +426,11 @@ namespace ExodusIO {
                     }
                 }
                 auto newMap = Teuchos::rcp(new Tpetra::Map<>(params.num_elem, finalIndices, 0, comm));
-                Teuchos::barrier(*comm);
-                currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    Teuchos::barrier(*comm);
+                    currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                }
                 assert(currMap->isOneToOne());
 
                 // Compute the global maximum number of entries per row for construction of new map...
@@ -438,8 +441,11 @@ namespace ExodusIO {
                 auto retmatrix = rcp(new Tpetra::CrsMatrix<>(newMap, globalMaxNumEntriesPerRow));
                 retmatrix->doExport(*origMatrix, exporter, Tpetra::INSERT);
                 retmatrix->fillComplete(newMap, newMap);
-                retmatrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_MEDIUM);
-                Teuchos::barrier(*comm);
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    retmatrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_MEDIUM);
+                    Teuchos::barrier(*comm);
+                }
                 *ret = retmatrix;
                 return true;
             }
@@ -449,7 +455,7 @@ namespace ExodusIO {
             // Uses the sequential METIS since writing an Exodus file is a sequential operation
             // requiring a single node to hold all of the data, meaning this may not work well
             // for extremely large meshes.
-            bool decompose(int partitions) {
+            bool decompose(int partitions, bool verbose=false) {
                 if (readFID == -1) return false;
 
                 // Gather all data we need to pass to Metis
@@ -457,13 +463,14 @@ namespace ExodusIO {
                 if (ex_get_init_ext(readFID,&params)) {
                     return false;
                 }
-                std::cout << "Title: " << params.title << "\n# of Dimensions: " << params.num_dim  << "\n# of Blobs: " << params.num_blob << "\n# of Assembly: " << params.num_assembly
-                    << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
-                    << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
-                    << "\n# of Side Sets: " << params.num_side_sets << "\n# of Face Sets: " << params.num_face_sets << "\n# of Node Maps: " << params.num_node_maps
-                    << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps: " << params.num_face_maps 
-                    << "\n# of Bytes in idx_t: " << sizeof(idx_t) << "\n# of Bytes in real_t: " << sizeof(real_t) << std::endl;
-
+                if (verbose) {
+                    std::cout << "Title: " << params.title << "\n# of Dimensions: " << params.num_dim  << "\n# of Blobs: " << params.num_blob << "\n# of Assembly: " << params.num_assembly
+                        << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
+                        << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
+                        << "\n# of Side Sets: " << params.num_side_sets << "\n# of Face Sets: " << params.num_face_sets << "\n# of Node Maps: " << params.num_node_maps
+                        << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps: " << params.num_face_maps 
+                        << "\n# of Bytes in idx_t: " << sizeof(idx_t) << "\n# of Bytes in real_t: " << sizeof(real_t) << std::endl;
+                }
                 int *ids = new int[params.num_elem_blk];
                 for (int i = 0; i < params.num_elem_blk; i++) ids[i] = 0;
                 idx_t num_elem_in_block = 0;
@@ -477,8 +484,11 @@ namespace ExodusIO {
                     std::cerr << "Failed to call `ex_get_ids`" << std::endl;
                     return false;
                 }
-                for (int i = 0; i < params.num_elem_blk; i++) {
-                    std::cout << "Element Block Id: " << (int) ids[i] << std::endl;
+
+                if (verbose) {
+                    for (int i = 0; i < params.num_elem_blk; i++) {
+                        std::cout << "Element Block Id: " << (int) ids[i] << std::endl;
+                    }
                 }
                 idx_t elementsIdx[params.num_elem + 1];
                 for (int i = 0; i < params.num_elem + 1; i++) elementsIdx[i] = 0;
@@ -492,46 +502,50 @@ namespace ExodusIO {
                         std::cerr << "Failed to `ex_get_block` element block " << i+1 << " of " << params.num_elem_blk << " with id " << ids[i] << std::endl;
                         return false;
                     }
-                    std::cout << "Block #" << i << " has the following..."
-                        << "\n\t# of Elements: " << num_elem_in_block
-                        << "\n\t# of Nodes per Element: " << num_nodes_per_elem
-                        << "\n\t# of Edges per Element: " << num_edges_per_elem
-                        << "\n\t# of Faces per Element: " << num_faces_per_elem
-                        << "\n\t# of Attributes: " << num_attr
-                        << "\n\tElement Type: " << elemtype << std::endl;
+                    if (verbose) {
+                        std::cout << "Block #" << i << " has the following..."
+                            << "\n\t# of Elements: " << num_elem_in_block
+                            << "\n\t# of Nodes per Element: " << num_nodes_per_elem
+                            << "\n\t# of Edges per Element: " << num_edges_per_elem
+                            << "\n\t# of Faces per Element: " << num_faces_per_elem
+                            << "\n\t# of Attributes: " << num_attr
+                            << "\n\tElement Type: " << elemtype << std::endl;
+                    }
 
-                        idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
-                        for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i] = 0;
-                        ex_get_elem_conn(readFID, ids[i], connect);
-                        for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i]--;
-                        std::cout << "Block #" << i << ": {";
-                        for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
-                            if (j) std::cout << ",";
-                            if (j % num_nodes_per_elem == 0) { 
-                                std::cout << "[";
-                                elementsIdx[elemIdx++] = nodeIdx;
-                            }
-                            std::cout << connect[j];
-                            nodesInElements.push_back(connect[j]);
-                            nodeIdx++;
-                            if ((j+1) % num_nodes_per_elem == 0) std::cout << "]";
+                    idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
+                    for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i] = 0;
+                    ex_get_elem_conn(readFID, ids[i], connect);
+                    for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i]--;
+                    if (verbose) std::cout << "Block #" << i << ": {";
+                    for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
+                        if (j && verbose) std::cout << ",";
+                        if (j % num_nodes_per_elem == 0) { 
+                            if (verbose) std::cout << "[";
+                            elementsIdx[elemIdx++] = nodeIdx;
                         }
-                        std::cout << "}" << std::endl;
-                        delete[] connect;
+                        if (verbose) std::cout << connect[j];
+                        nodesInElements.push_back(connect[j]);
+                        nodeIdx++;
+                        if ((j+1) % num_nodes_per_elem == 0 && verbose) std::cout << "]";
+                    }
+                    if (verbose) std::cout << "}" << std::endl;
+                    delete[] connect;
                 }
                 elementsIdx[elemIdx] = nodeIdx;
-                std::cout << "Indexing: {";
-                for (idx_t i = 0; i < params.num_elem + 1; i++) {
-                    if (i) std::cout << ",";
-                    std::cout << elementsIdx[i];
+                if (verbose) {
+                    std::cout << "Indexing: {";
+                    for (idx_t i = 0; i < params.num_elem + 1; i++) {
+                        if (i) std::cout << ",";
+                        std::cout << elementsIdx[i];
+                    }
+                    std::cout << "}" << std::endl;
+                    std::cout << "Nodes: {";
+                    for (idx_t i = 0; i < nodesInElements.size(); i++) {
+                        if (i) std::cout << ",";
+                        std::cout << nodesInElements[i];
+                    }
+                    std::cout << "}" << std::endl;
                 }
-                std::cout << "}" << std::endl;
-                std::cout << "Nodes: {";
-                for (idx_t i = 0; i < nodesInElements.size(); i++) {
-                    if (i) std::cout << ",";
-                    std::cout << nodesInElements[i];
-                }
-                std::cout << "}" << std::endl;
 
                 idx_t ne = params.num_elem;
                 idx_t nn = params.num_nodes;
@@ -560,27 +574,29 @@ namespace ExodusIO {
                     std::cerr << "Currently unsupported element type for mesh: " << elemtype << std::endl;
                     return false;
                 }
-                std::cout << "Calling METIS_PartMeshNodal with " << nparts << " partitions." << std::endl;
+                if (verbose) std::cout << "Calling METIS_PartMeshNodal with " << nparts << " partitions." << std::endl;
                 int retval = METIS_PartMeshDual(&ne, &nn, eptr, eind, vwgt, vsize, &ncommon, &nparts, tpwgts, options, &objval, epart, npart);
                 if (retval != METIS_OK) {
-                    std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR")) << std::endl;
+                    std::cerr << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR")) << std::endl;
                     return false;
                 }
 
-                std::cout << "ObjVal = " << objval << std::endl;
-                std::cout << "Element Partition: {";
-                for (idx_t i = 0; i < ne; i++) {
-                    if (i) std::cout << ",";
-                    std::cout << epart[i];
+                if (verbose) {
+                    std::cout << "ObjVal = " << objval << std::endl;
+                    std::cout << "Element Partition: {";
+                    for (idx_t i = 0; i < ne; i++) {
+                        if (i) std::cout << ",";
+                        std::cout << epart[i];
+                    }
+                    std::cout << "}" << std::endl;
+                    std::cout << "Node Partition: {";
+                    for (idx_t i = 0; i < nn; i++) {
+                        if (i) std::cout << ",";
+                        std::cout << npart[i];
+                    }
+                    std::cout << "}" << std::endl;
                 }
-                std::cout << "}" << std::endl;
-                std::cout << "Node Partition: {";
-                for (idx_t i = 0; i < nn; i++) {
-                    if (i) std::cout << ",";
-                    std::cout << npart[i];
-                }
-                std::cout << "}" << std::endl;
-                
+
                 if (npart[0] == -2) npart[0] = 0;
 
                 std::vector<idx_t> elembin[nparts + 1];
@@ -608,15 +624,17 @@ namespace ExodusIO {
                     }
                     delete[] connect;
                 }
-                    
-                for (idx_t i = 0; i < nparts + 1; i++) {
-                    if (i == nparts) std::cout << "Any Partition(" << elembin[i].size() << "): [";
-                    else std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
-                    for (idx_t j = 0; j < elembin[i].size(); j++) {
-                        if (j) std::cout << ",";
-                        std::cout << elembin[i][j];
+
+                if (verbose) {    
+                    for (idx_t i = 0; i < nparts + 1; i++) {
+                        if (i == nparts) std::cout << "Any Partition(" << elembin[i].size() << "): [";
+                        else std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
+                        for (idx_t j = 0; j < elembin[i].size(); j++) {
+                            if (j) std::cout << ",";
+                            std::cout << elembin[i][j];
+                        }
+                        std::cout << "]" << std::endl;
                     }
-                    std::cout << "]" << std::endl;
                 }
 
                 idx_t numparts = 0;
@@ -651,20 +669,22 @@ namespace ExodusIO {
                 ex_put_init(writeFID, params.title, params.num_dim, params.num_nodes, params.num_elem, numparts, params.num_node_sets /* + nparts*/, params.num_side_sets);
 
                 // Writes out node coordinations
-                std::cout << "Sizeof(real_t) = " << sizeof(real_t) << std::endl;
+                if (verbose) std::cout << "Sizeof(real_t) = " << sizeof(real_t) << std::endl;
                 real_t *xs = new real_t[params.num_nodes];
                 real_t *ys = new real_t[params.num_nodes];
                 real_t *zs = NULL;
                 if (params.num_dim >= 3) zs = new real_t[params.num_nodes];
                 ex_get_coord(readFID, xs, ys, zs);
-                std::cout << "Node Coordinates: [";
-                for (idx_t i = 0; i < params.num_nodes; i++) {
-                    if (i) std::cout << ",";
-                    std::cout << "(" << xs[i] << "," << ys[i] << "," << (zs ? zs[i] : 0) << ")";
+                
+                if (verbose) {
+                    std::cout << "Node Coordinates: [";
+                    for (idx_t i = 0; i < params.num_nodes; i++) {
+                        if (i) std::cout << ",";
+                        std::cout << "(" << xs[i] << "," << ys[i] << "," << (zs ? zs[i] : 0) << ")";
+                    }
+                    std::cout << "]" << std::endl;
                 }
-                std::cout << "]" << std::endl;
                 ex_put_coord(writeFID, xs, ys, zs);
-                // NOTE: Bad Free when trying to delete[] the ys and zs, but not xs... Debug Later!
                 delete[] xs;
                 delete[] ys;
                 if (params.num_dim >= 3) delete[] zs;
@@ -686,31 +706,22 @@ namespace ExodusIO {
                 ex_put_map(writeFID, elem_map);
                 delete[] elem_map;
 
-                for (idx_t i = 0; i < nparts + 1; i++) {
-                    if (i == nparts) std::cout << "Any Partition(" << elembin[i].size() << "): [";
-                    else std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
-                    for (idx_t j = 0; j < elembin[i].size(); j++) {
-                        if (j) std::cout << ",";
-                        std::cout << elembin[i][j];
-                    }
-                    std::cout << "]" << std::endl;
-                }
-
                 // Write new element blocks
                 idx_t currPart = 0;
                 for (idx_t i = 0; i < nparts + 1; i++) {
                     size_t num_elems_per_block = elembin[i].size();
                     idx_t num_nodes_per_elem = -1;
-                    std::cout << "num_elems_per_block=" << num_elems_per_block << std::endl;
+                    if (num_nodes_per_elem == 0 && i == nparts) continue;
+                    if (verbose) std::cout << "num_elems_per_block=" << num_elems_per_block << std::endl;
                     for (size_t j = 0; j < num_elems_per_block; j++) {
-                        std::cout << "Index:" << j << ", Size: " << elembin[i].size() << std::endl;
+                        if (verbose) std::cout << "Index:" << j << ", Size: " << elembin[i].size() << std::endl;
                         idx_t elemIdx = elembin[i][j];
-                        std::cout << "elemIdx=" << elemIdx << std::endl;
+                        if (verbose) std::cout << "elemIdx=" << elemIdx << std::endl;
                         num_nodes_per_elem = abs(elementsIdx[elemIdx + 1] - elementsIdx[elemIdx]);
-                        std::cout << "num_nodes_per_elem=" << num_nodes_per_elem << std::endl;
+                        if (verbose) std::cout << "num_nodes_per_elem=" << num_nodes_per_elem << std::endl;
                         break;
                     }
-                    if (num_nodes_per_elem == -1) {
+                    if (num_nodes_per_elem == -1 && verbose) {
                         std::cerr << "Was not able to deduce the # of nodes per elem for block #" << i << "!" << std::endl;
                         continue;
                     }
@@ -720,17 +731,17 @@ namespace ExodusIO {
 
                     idx_t *connect = new idx_t[num_elems_per_block * num_nodes_per_elem];
                     idx_t idx = 0;
-                    std::cout << "Connectivity for Block #" << currPart << ": [ ";
+                    if (verbose) std::cout << "Connectivity for Block #" << currPart << ": [ ";
                     for (idx_t elemIdx : elembin[i]) {
-                        std::cout << "[ ";
+                        if (verbose) std::cout << "[ ";
                         for (idx_t j = elementsIdx[elemIdx]; j < elementsIdx[elemIdx+1]; j++) {
                             connect[idx++] = nodesInElements[j]+1;
-                            std::cout << nodesInElements[j]+1 << " ";
+                            if (verbose) std::cout << nodesInElements[j]+1 << " ";
                         }
-                        std::cout << "]";
+                        if (verbose) std::cout << "]";
                     }
-                    std::cout << "]" << std::endl;
-                    if (idx == 0) {
+                    if (verbose) std::cout << "]" << std::endl;
+                    if (idx == 0 && verbose) {
                         std::cerr << "Connectivity is bad!" << std::endl;
                     }
                     ex_put_conn(writeFID, EX_ELEM_BLOCK, currPart++, connect, NULL, NULL);
@@ -752,12 +763,14 @@ namespace ExodusIO {
                 
                     assert(!ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL));
                     
-                    std::cout << "Nodeset #" << ids[i] << ": [";
-                    for (int j = 0; j < num_nodes_in_set; j++) {
-                        if (j) std::cout << ",";
-                        std::cout << node_list[j];
+                    if (verbose) {
+                        std::cout << "Nodeset #" << ids[i] << ": [";
+                        for (int j = 0; j < num_nodes_in_set; j++) {
+                            if (j) std::cout << ",";
+                            std::cout << node_list[j];
+                        }
+                        std::cout << "]" << std::endl;
                     }
-                    std::cout << "]" << std::endl;
                 
                     assert(!ex_put_set(writeFID, EX_NODE_SET, ids[i], node_list, NULL));
                 
@@ -811,7 +824,7 @@ namespace ExodusIO {
                 ex_put_prop_names(writeFID, EX_NODE_SET, num_props, prop_names);
                 
                 for (idx_t i = 0; i < num_props; i++) {
-                    std::cout << "prop_names[" << i << "] = " << prop_names[i] << std::endl;
+                    if (verbose) std::cout << "prop_names[" << i << "] = " << prop_names[i] << std::endl;
                     ex_get_prop_array(readFID, EX_NODE_SET, prop_names[i], prop_values);
                     ex_put_prop_array(writeFID, EX_NODE_SET, prop_names[i], prop_values);
                 }
@@ -912,8 +925,6 @@ namespace ExodusIO {
                     delete[] info[i];
                 }
 
-                // constructTPetra(npart, nn, epart, eptr, eind, ne);
-
                 return true;
             }
 
@@ -931,43 +942,5 @@ namespace ExodusIO {
             int readFID = -1;
             int writeFID = -1;
 
-            // void constructTPetra(idx_t *npart, idx_t nparts, idx_t *epart, idx_t *eptr, idx_t *eind, idx_t num_elems) {
-            //     typedef Tpetra::Map<> map_type;
-            //     typedef Tpetra::Vector<>::scalar_type scalar_type;
-            //     typedef Tpetra::Vector<>::local_ordinal_type local_ordinal_type;
-            //     typedef Tpetra::Vector<>::global_ordinal_type global_ordinal_type;
-            //     typedef Tpetra::Vector<>::mag_type magnitude_type;
-            //     typedef Tpetra::CrsMatrix<> crs_matrix_type;
-
-            //     using Teuchos::RCP;
-            //     using Teuchos::rcp;
-            //     using Teuchos::Array;
-            //     using Teuchos::ArrayView;
-
-            //     auto comm = Tpetra::getDefaultComm();
-            //     int rank = comm->getRank();
-            //     // Gather # of local indices
-            //     idx_t num_local_elems = 0;
-            //     for (idx_t i = 0; i < num_elems; i++) {
-            //         if (epart[i] == rank) {
-            //             num_local_elems++;
-            //         }
-            //     }
-            //     Array<global_ordinal_type> elementList (num_local_elems);
-            //     idx_t idx = 0;
-            //     for (idx_t i = 0; i < num_elems; i++) {
-            //         if (epart[i] == rank) {
-            //             elementList[idx++] = i;
-            //         }
-            //     }
-            //     for (Array<global_ordinal_type>::size_type i = 0; i < num_elems; i++) {
-            //        elementList[i] = epart[i];
-            //     }
-
-            //     // Row map consists of Elements; Column map consists of Nodes that comprise the element
-            //     RCP<const map_type> rowmap = rcp(new map_type(num_elems, elementList, 0, Tpetra::getDefaultComm()));
-            //     RCP<const map_type> colmap = Tpetra::Details::makeColMap();
-            //     // auto matrix = crs_matrix_type();
-            // }
     };
 };
