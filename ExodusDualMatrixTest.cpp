@@ -23,8 +23,8 @@ int main(int argc, char *argv[]) {
         }
 
         Teuchos::RCP<Tpetra::CrsMatrix<>> ret;
-        if (!io.getMatrix(&ret, verbose)) {
-            std::cerr << "Process #" << rank <<  ": Failed to getMatrix!!" << std::endl;
+        if (!io.getDual(&ret, verbose)) {
+            std::cerr << "Process #" << rank <<  ": Failed to getDual!!" << std::endl;
             return EXIT_FAILURE;
         }
 

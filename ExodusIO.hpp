@@ -58,10 +58,372 @@ namespace ExodusIO {
                 return true;
             }
 
+            // Reads in the Exodus file specified in the 'open' function, partitions it 
+            // according to ParMETIS, and then returns the Compressed Sparse Row Matrix.
+            // The returned matrix is a Node x Node matrix, not one based on elements.
+            // To obtain a matrix consisting purely of elements, see `getDual`.
+            bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret, bool verbose=false) {
+                auto comm = Tpetra::getDefaultComm();
+                auto rank = Teuchos::rank(*comm);
+                auto ranks = Teuchos::size(*comm);
+                if (readFID == -1) return false;
+
+                /////////////////////////////////////////////////////////////////////
+                // 1. Read in Mesh from Exodus File
+                /////////////////////////////////////////////////////////////////////
+
+                // Gather all data we need to pass to ParMETIS - Each MPI Process is doing this...
+                ex_init_params params;
+                if (ex_get_init_ext(readFID,&params)) {
+                    return false;
+                }
+                if (rank == 0 && verbose) {
+                    std::cout << "Title: " << params.title << "\n# of Dimensions: " << params.num_dim  << "\n# of Blobs: " << params.num_blob << "\n# of Assembly: " << params.num_assembly
+                        << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
+                        << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
+                        << "\n# of Side Sets: " << params.num_side_sets << "\n# of Face Sets: " << params.num_face_sets << "\n# of Node Maps: " << params.num_node_maps
+                        << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps: " << params.num_face_maps 
+                        << "\n# of Bytes in idx_t: " << sizeof(idx_t) << "\n# of Bytes in real_t: " << sizeof(real_t) << std::endl;
+                }
+                
+                int *ids = new int[params.num_elem_blk];
+                for (int i = 0; i < params.num_elem_blk; i++) ids[i] = 0;
+                idx_t num_elem_in_block = 0;
+                idx_t num_nodes_per_elem = 0;
+                idx_t num_edges_per_elem = 0;
+                idx_t num_faces_per_elem = 0;
+                idx_t num_attr = 0;
+                char elemtype[MAX_STR_LENGTH+1];
+
+                if (ex_get_ids(readFID, EX_ELEM_BLOCK, ids)) {
+                    std::cerr << "Rank #" << Teuchos::rank(*comm) << ": " << "Failed to call `ex_get_ids`" << std::endl;
+                    return false;
+                }
+                if (verbose) {
+                    for (int i = 0; i < params.num_elem_blk; i++) {
+                        std::cout << "Rank #" << Teuchos::rank(*comm) << ": " << "Element Block Id: " << (int) ids[i] << std::endl;
+                    }
+                }
+                idx_t elementsIdx[params.num_elem + 1];
+                for (int i = 0; i < params.num_elem + 1; i++) elementsIdx[i] = 0;
+                std::vector<idx_t> nodesInElements;
+                idx_t elemIdx = 0;
+                idx_t nodeIdx = 0;
+
+                // Compute current process' start index, and ignore everything before this...
+                idx_t startIdx = (params.num_elem / ranks) * rank;
+                idx_t endIdx = (params.num_elem / ranks) * (rank + 1);
+                idx_t passedIdx = 0;
+                // Handle edge case where we have odd number of elements; give the remainder
+                // to the last process.
+                if (rank == ranks - 1) {
+                    endIdx = params.num_elem;
+                }
+
+                // using the element block parameters read the element block info
+                for (idx_t i=0; i<params.num_elem_blk; i++) {
+                    if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype, &num_elem_in_block, &num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) {
+                        std::cerr << "Rank #" << rank << ": " << "Failed to `ex_get_block` element block " << i+1 << " of " << params.num_elem_blk << " with id " << ids[i] << std::endl;
+                        return false;
+                    }
+                    if (rank == 0 && verbose) {
+                        std::cout << "Block #" << i << " has the following..."
+                            << "\n\t# of Elements: " << num_elem_in_block
+                            << "\n\t# of Nodes per Element: " << num_nodes_per_elem
+                            << "\n\t# of Edges per Element: " << num_edges_per_elem
+                            << "\n\t# of Faces per Element: " << num_faces_per_elem
+                            << "\n\t# of Attributes: " << num_attr
+                            << "\n\tElement Type: " << elemtype << std::endl;
+                    }
+
+                    idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
+                    for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i] = 0;
+                    ex_get_elem_conn(readFID, ids[i], connect);
+                    for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
+                        if (j % num_nodes_per_elem == 0) { 
+                            if (passedIdx++ < startIdx) {
+                                j += num_nodes_per_elem - 1;
+                                continue;
+                            }
+                            elementsIdx[elemIdx++] = nodeIdx;
+                        }
+                        nodesInElements.push_back(connect[j]);
+                        nodeIdx++;
+                        
+                        // End of Element Block
+                        if ((j+1) % num_nodes_per_elem == 0) {
+                            if (passedIdx == endIdx) break;
+                        }
+                    }
+                    delete[] connect;
+                }
+                elementsIdx[elemIdx] = nodeIdx;
+                size_t numLocalElems = elemIdx + 1;
+
+                if (verbose) {
+                    Teuchos::barrier(*comm);
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << std::endl; 
+                            std::cout << "Indexing: {";
+                            for (idx_t i = 0; i < numLocalElems; i++) {
+                                if (i) std::cout << ",";
+                                std::cout << elementsIdx[i];
+                            }
+                            std::cout << "}" << std::endl;
+                            std::cout << "Nodes: {";
+                            for (idx_t i = 0; i < nodesInElements.size(); i++) {
+                                if (i) std::cout << ",";
+                                if (i % num_nodes_per_elem == 0) std::cout << "[";
+                                std::cout << nodesInElements[i];
+                                if ((i+1) % num_nodes_per_elem == 0) std::cout << "]";
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                /////////////////////////////////////////////////////////////////////
+                // 2. Partition the Mesh via ParMETIS
+                /////////////////////////////////////////////////////////////////////
+
+                // Distributed CSR Format - Split up the element list (eind) into nparts contiguous chunks.
+                // That is, it is equivalent to sequential CSR but the indexing starts at 0 (local indexing)
+                // and the nodes in each element is 1/P starting at some index after the last process and before
+                // the next process. Each process is reading in the Exodus file, and hence can just ignore the parts
+                // of the process they do not care about.
+
+                // Distribution of elements; scheme used is a simple block distribution, where
+                // indices [startIdx, endIdx) contains the elements distributed over this process.
+                // Each process must have the same elemdist, and so must also compute the indices for
+                // all other MPI processes...
+
+                // When partitioning the mesh, it will return the partitioning scheme for the elements; the elements
+                // should be sent to their respective processes in an all-to-all exchange.
+                idx_t *elemdist = new idx_t[ranks+1];
+                elemdist[0] = 0;
+                for (int i = 1; i <= ranks; i++) {
+                    elemdist[i] = elemdist[i-1] + params.num_elem / ranks;
+                }
+                elemdist[ranks] = params.num_elem;
+                idx_t numVertices = elemdist[rank+1] - elemdist[rank];
+
+                Teuchos::barrier(*comm);
+                if (rank == 0 && verbose) {
+                    std::cout << "Element Distribution: {" << std::endl;
+                    int pid = 0;
+                    for (int i = 1; i <= ranks; i++) {
+                        std::cout << "\tProcess #" << pid++ << " owns " << elemdist[i-1] << " to " << elemdist[i]-1 << std::endl;
+                    }
+                    std::cout << "}" << std::endl;
+                }
+
+                idx_t *eptr = elementsIdx;
+                idx_t *eind = nodesInElements.data();
+                idx_t *elmwgt = nullptr;
+                idx_t wgtflag = 0;
+                idx_t numflag = 0; // 0-based indexing (C-style)
+                idx_t ncon = 1; // # of weights per vertex is 0
+                idx_t ncommonnodes = 1;
+                idx_t nparts = ranks;
+                real_t tpwgts[ranks];
+                for (int i = 0; i < ranks; i++) tpwgts[i] = 1.0 / ranks;
+                real_t ubvec[1];
+                ubvec[0] = 1.05;
+                idx_t options[3]; // May segfault?
+                options[0] = 0;
+                idx_t edgecut = 0;
+                idx_t *part = new idx_t[numVertices];
+                MPI_Comm mpicomm = MPI_COMM_WORLD;
+
+                // Note: We are assuming that there is only one Element Type in this mesh...
+                if (strncmp(elemtype, "TETRA", 5) == 0) {
+                    ncommonnodes = 3;
+                } else if (strncmp(elemtype, "TRI", 3) == 0) {
+                    ncommonnodes = 2;
+                } else if (strncmp(elemtype, "HEX", 3) == 0) {
+                    ncommonnodes = 4;
+                } else {
+                    std::cerr << "Currently unsupported element type for mesh: " << elemtype << std::endl;
+                    return false;
+                }
+                int retval = ParMETIS_V3_PartMeshKway(elemdist, eptr, eind, elmwgt, &wgtflag, &numflag, &ncon,  &ncommonnodes, &nparts, tpwgts, ubvec, options, &edgecut, part, &mpicomm);
+                if (retval != METIS_OK) {
+                    std::cout << "Error Code: " << (retval == METIS_ERROR_INPUT ? "METIS_ERROR_INPUT" : (retval == METIS_ERROR_MEMORY ? "METIS_ERROR_MEMORY" : "METIS_ERROR")) << std::endl;
+                    return false;
+                }
+                
+                if (verbose) {
+                    Teuchos::barrier(*comm);
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << std::endl;
+                            std::cout << "Partition: {";
+                            for (int i = 0; i < numVertices; i++) {
+                                if (i) std::cout << ",";
+                                std::cout << part[i];
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                /////////////////////////////////////////////////////////////////////
+                // 3. Send the new partitioned indices to each rank along with their
+                //    nodes to their respective target processors.
+                /////////////////////////////////////////////////////////////////////
+
+                std::vector<idx_t> redistribute[ranks];
+                std::vector<idx_t> redistributeNodes[ranks];
+                for (int i = 0; i < ranks; i++) {
+                    if (rank == i) {                        
+                        // Collect vertices by global index to be redistributed to other processes...
+                        for (int j = 0; j < numVertices; j++) {
+                            redistribute[part[j]].push_back(elemdist[rank] + j);
+                            for (int k = eptr[j]; k < eptr[j+1]; k++) {
+                                redistributeNodes[part[j]].push_back(eind[k]);
+                            }
+                        }
+                        if (verbose) {
+                            for (int j = 0; j < ranks; j++) {
+                                if (j == rank) {
+                                    std::cout << "Process #" << j << "(" << redistribute[j].size() << "): {";
+                                } else {
+                                    std::cout << "Process #" << rank << " -> Process #" << j << "(" << redistribute[j].size() << "): {";
+                                }
+                                for (int k = 0; k < redistribute[j].size(); k++) {
+                                    if (k) std::cout << ",";
+                                    std::cout << redistribute[j][k];
+                                }
+                                std::cout << "}" << std::endl;
+                            }
+                            for (int j = 0; j < ranks; j++) {
+                                if (j == rank) {
+                                    std::cout << "Process #" << j << "(" << redistributeNodes[j].size() << "): {";
+                                } else {
+                                    std::cout << "Process #" << rank << " -> Process #" << j << "(" << redistributeNodes[j].size() << "): {";
+                                }
+                                for (int k = 0; k < redistributeNodes[j].size(); k++) {
+                                    if (k) std::cout << ",";
+                                    if (k % num_nodes_per_elem == 0) std::cout << "[";
+                                    std::cout << redistributeNodes[j][k];
+                                    if ((k+1) % num_nodes_per_elem == 0) std::cout << "]";
+                                }
+                                std::cout << "}" << std::endl;
+                            }
+                        }
+                    }
+                    if (verbose) Teuchos::barrier(*comm);
+                }
+
+                // Perform an All-To-All Exchange for each MPI Process
+                // Each process needs to get its new indices to construct the new map.
+                // Fetch each other process' sizes
+                size_t asyncOps = 2 * ranks - 2; // (Isend + Irecv per rank) - 2 (no communication to ourselves)
+                MPI_Request request[asyncOps];
+                MPI_Status status[asyncOps];
+                int64_t buflen[ranks][2];
+                buflen[rank][0] = redistribute[rank].size();
+                buflen[rank][1] = redistributeNodes[rank].size();
+                size_t idx = 0;
+                for (int i = 0; i < ranks; i++) {
+                    if (rank == i) {
+                        continue;
+                    }
+                    size_t len[2] = {redistribute[i].size(), redistributeNodes[i].size()};
+                    MPI_Isend(len, 2, MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                    MPI_Irecv(&buflen[i], 2, MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                }
+                if (MPI_Waitall(asyncOps, request, status) != MPI_SUCCESS) {
+                    std::cerr << "Unable to pass sizes between processes!!! MPI_Waitall failure!" << std::endl;
+                    return false;
+                }
+
+                size_t totalElements = 0;
+                size_t totalNodes = 0;
+                for (int i = 0; i < ranks; i++) {
+                    totalElements += buflen[i][0];
+                    totalNodes += buflen[i][1];
+                }
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) {
+                            std::cout << "Process #" << rank << " has " << totalElements << " elements and " << totalNodes << " nodes!" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                // Gather all entries to be sent to other MPI processes
+                asyncOps = 4 * ranks - 4; // (2 Isend + 2 Irecv) - 4 (No communication to self)
+                idx_t ***buf = new idx_t**[2];
+                buf[0] = new idx_t*[ranks];
+                buf[1] = new idx_t*[ranks];
+                idx = 0;
+                for (int i = 0; i < ranks; i++) {
+                    if (rank == i) {
+                        buf[i][0] = redistribute[rank].data();
+                        buf[i][1] = redistributeNodes[rank].data();
+                    } else {
+                        buf[i][0] = new idx_t[buflen[i][0]];
+                        buf[i][1] = new idx_t[buflen[i][1]];
+                        MPI_Isend(redistribute[i].data(), redistribute[i].size(), sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                        MPI_Isend(redistributeNodes[i].data(), redistributeNodes[i].size(), sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                        MPI_Irecv(buf[i][0], buflen[i][0], sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                        MPI_Irecv(buf[i][1], buflen[i][1], sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                    }
+                }
+                if (MPI_Waitall(asyncOps, request, status) != MPI_SUCCESS) {
+                    std::cerr << "Unable to pass buffers between processes!!! MPI_Waitall failure!" << std::endl;
+                    return false;
+                }
+
+                idx_t *ourElements = new idx_t[totalElements];
+                idx_t *ourNodes = new idx_t[totalNodes];
+                elemIdx = 0;
+                nodeIdx = 0;
+                for (int i = 0; i < ranks; i++) {
+                    for (int j = 0; j < buflen[i][0]; j++) {
+                        ourElements[elemIdx++] = buf[i][0][j];
+                    }
+                    for (int j = 0; j < buflen[i][1]; j++) {
+                        ourNodes[nodeIdx++] = buf[i][1][j];
+                    }
+                }
+                assert(elemIdx == totalElements);
+                assert(nodeIdx == totalNodes);
+
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) {
+                            std::cout << "Process #" << rank << " owns the elements: {";
+                            for (int j = 0; j < totalElements; j++) {
+                                if (j) std::cout << ",";
+                                std::cout << ourElements[j];
+                            }
+                            std::cout << "}" << std::endl;
+                            std::cout << "Process #" << rank << " owns the nodes: {";
+                            for (int j = 0; j < totalNodes; j++) {
+                                if (j) std::cout << ",";
+                                if (j % num_nodes_per_elem == 0) std::cout << "[";
+                                std::cout << ourNodes[j];
+                                if ((j+1) % num_nodes_per_elem == 0) std::cout << "]";
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                return false;
+            }
+
             // Reads in the partitioning of the Exodus file specified in `open` and calls
             // ParMETIS to construct a dual graph; this dual graph is then partitioned
             // and redistributed/balanced across the appropriate number of processes.
-            bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret, bool verbose=false) {
+            bool getDual(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret, bool verbose=false) {
                 auto comm = Tpetra::getDefaultComm();
                 auto rank = Teuchos::rank(*comm);
                 auto ranks = Teuchos::size(*comm);
@@ -312,7 +674,6 @@ namespace ExodusIO {
                         Teuchos::barrier(*comm);
                     }
                 }
-
 
                 /////////////////////////////////////////////////////////////////////
                 // 5. Partition Dual Graph to obtain new partition

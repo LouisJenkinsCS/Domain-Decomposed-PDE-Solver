@@ -61,4 +61,5 @@ CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address"
 # g++-11 -Wall -lexodus -I/usr/local/Cellar/open-mpi/4.1.1_2/include/ -I$NETCDF_INCLUDE -I$EXODUSII_INCLUDE -L$EXODUSII_LIB $CCFLAGS ExodusMWE.cpp -o exec/ExodusMWE
 
 mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusIODecomposeTest.cpp -o exec/ExodusIODecomposeTest
+mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusDualMatrixTest.cpp -o exec/ExodusDualMatrixTest
 mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusMatrixTest.cpp -o exec/ExodusMatrixTest
