@@ -448,8 +448,13 @@ namespace ExodusIO {
                     Teuchos::barrier(*comm);
                     map->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                 }
-
                 Teuchos::barrier(*comm);
+    
+                /////////////////////////////////////////////////////////////////////
+                // 5. Construct the nodal matrix from the constructed map.
+                /////////////////////////////////////////////////////////////////////
+
+
                 return false;
             }
 
