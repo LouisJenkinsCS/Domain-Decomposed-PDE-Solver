@@ -322,8 +322,8 @@ namespace ExodusIO {
                 // Each process needs to get its new indices to construct the new map.
                 // Fetch each other process' sizes
                 size_t asyncOps = 2 * ranks - 2; // (Isend + Irecv per rank) - 2 (no communication to ourselves)
-                MPI_Request request[asyncOps];
-                MPI_Status status[asyncOps];
+                MPI_Request request[2 * asyncOps];
+                MPI_Status status[2 * asyncOps];
                 int64_t buflen[ranks][2];
                 buflen[rank][0] = redistribute[rank].size();
                 buflen[rank][1] = redistributeNodes[rank].size();
@@ -380,8 +380,8 @@ namespace ExodusIO {
                     return false;
                 }
 
-                idx_t *ourElements = new idx_t[totalElements];
-                idx_t *ourNodes = new idx_t[totalNodes];
+                std::vector<idx_t> ourElements(totalElements);
+                std::vector<idx_t> ourNodes(totalNodes);
                 elemIdx = 0;
                 nodeIdx = 0;
                 for (int i = 0; i < ranks; i++) {
@@ -394,6 +394,10 @@ namespace ExodusIO {
                 }
                 assert(elemIdx == totalElements);
                 assert(nodeIdx == totalNodes);
+
+                std::vector<idx_t> nodeIndices(ourNodes);
+                sort(nodeIndices.begin(), nodeIndices.end());
+                nodeIndices.erase(unique(nodeIndices.begin(), nodeIndices.end()), nodeIndices.end());
 
                 if (verbose) {
                     for (int i = 0; i < ranks; i++) {
@@ -412,11 +416,40 @@ namespace ExodusIO {
                                 if ((j+1) % num_nodes_per_elem == 0) std::cout << "]";
                             }
                             std::cout << "}" << std::endl;
+                            std::cout << "Process #" << rank << " owns the indices: {";
+                            for (int j = 0; j < nodeIndices.size(); j++) {
+                                if (j) std::cout << ",";
+                                std::cout << nodeIndices[j];
+                            }
+                            std::cout << "}" << std::endl;
                         }
                         Teuchos::barrier(*comm);
                     }
                 }
 
+                /////////////////////////////////////////////////////////////////////
+                // 4. Construct the Map consisting of Map indices owned by this process
+                /////////////////////////////////////////////////////////////////////
+
+                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
+                idx = 0;
+                for (auto x : nodeIndices) {
+                    indices[idx++] = x;
+                }
+                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, indices, 0, comm));
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    Teuchos::barrier(*comm);
+                    currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                }
+                auto map = Tpetra::createOneToOne(currMap.getConst());
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    Teuchos::barrier(*comm);
+                    map->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                }
+
+                Teuchos::barrier(*comm);
                 return false;
             }
 
