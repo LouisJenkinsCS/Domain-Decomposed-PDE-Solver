@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <parmetis.h>
 #include <sstream>
+#include <set>
 
 
 
@@ -62,6 +63,7 @@ namespace ExodusIO {
             // according to ParMETIS, and then returns the Compressed Sparse Row Matrix.
             // The returned matrix is a Node x Node matrix, not one based on elements.
             // To obtain a matrix consisting purely of elements, see `getDual`.
+            // TODO: Crashes when run sequentially...
             bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret, bool verbose=false) {
                 auto comm = Tpetra::getDefaultComm();
                 auto rank = Teuchos::rank(*comm);
@@ -357,22 +359,27 @@ namespace ExodusIO {
                 }
 
                 // Gather all entries to be sent to other MPI processes
+                // TODO!!! Got a bit confused with how to index this array and so I decided to just 
+                // correct the indices (i.e. right now it is 2 x ranks matrix rather than a ranks x 2 matrix)
+                // but I was too exhausted at the time to make the change. This makes indexing in the code rather
+                // confusing... fix this up! Cutting down on Isend and Irecv isn't worth losing readability and
+                // maintainability of the code...
                 asyncOps = 4 * ranks - 4; // (2 Isend + 2 Irecv) - 4 (No communication to self)
-                idx_t ***buf = new idx_t**[2];
+                idx_t ***buf = new idx_t**[2]; // 2 x ranks matrix -> ranks x 2 matrix
                 buf[0] = new idx_t*[ranks];
                 buf[1] = new idx_t*[ranks];
                 idx = 0;
                 for (int i = 0; i < ranks; i++) {
                     if (rank == i) {
-                        buf[i][0] = redistribute[rank].data();
-                        buf[i][1] = redistributeNodes[rank].data();
+                        buf[0][i] = redistribute[rank].data();
+                        buf[1][i] = redistributeNodes[rank].data();
                     } else {
-                        buf[i][0] = new idx_t[buflen[i][0]];
-                        buf[i][1] = new idx_t[buflen[i][1]];
+                        buf[0][i] = new idx_t[buflen[i][0]];
+                        buf[1][i] = new idx_t[buflen[i][1]];
                         MPI_Isend(redistribute[i].data(), redistribute[i].size(), sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
                         MPI_Isend(redistributeNodes[i].data(), redistributeNodes[i].size(), sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
-                        MPI_Irecv(buf[i][0], buflen[i][0], sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
-                        MPI_Irecv(buf[i][1], buflen[i][1], sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                        MPI_Irecv(buf[0][i], buflen[i][0], sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
+                        MPI_Irecv(buf[1][i], buflen[i][1], sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG_LONG, i, 0, MPI_COMM_WORLD, &request[idx++]);
                     }
                 }
                 if (MPI_Waitall(asyncOps, request, status) != MPI_SUCCESS) {
@@ -386,10 +393,10 @@ namespace ExodusIO {
                 nodeIdx = 0;
                 for (int i = 0; i < ranks; i++) {
                     for (int j = 0; j < buflen[i][0]; j++) {
-                        ourElements[elemIdx++] = buf[i][0][j];
+                        ourElements[elemIdx++] = buf[0][i][j];
                     }
                     for (int j = 0; j < buflen[i][1]; j++) {
-                        ourNodes[nodeIdx++] = buf[i][1][j];
+                        ourNodes[nodeIdx++] = buf[1][i][j];
                     }
                 }
                 assert(elemIdx == totalElements);
@@ -454,6 +461,63 @@ namespace ExodusIO {
                 // 5. Construct the nodal matrix from the constructed map.
                 /////////////////////////////////////////////////////////////////////
 
+                
+                // A node is adjacent to another node if both belong to the same element
+                // To create the matrix, we need to know the maximum number of columns in
+                // a given row, and so we need to group nodes with their adjacent nodes
+                // ahead of time.
+                std::map<idx_t, std::set<idx_t>> adjacents;
+                for (int i = 0; i < totalNodes; i += num_nodes_per_elem) {
+                    for (int j = i; j < i + num_nodes_per_elem; j++) {
+                        for (int k = i; k < i + num_nodes_per_elem; k++) {
+                            if (j == k) continue;
+                            adjacents[ourNodes[j]].insert(ourNodes[k]);
+                        }
+                    }
+                }
+                size_t maxColumnsPerRow = 0;
+                for (auto &row : adjacents) {
+                    maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
+                }
+                
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) {
+                            std::cout << "Process #" << rank << " has " << maxColumnsPerRow << " maximum row length!" << std::endl;
+                            // std::cout << "Rows: {" << std::endl;
+                            // for (idx_t node : nodeIndices) {
+                            //     std::cout << "\tRow #" << node << ": {";
+                            //     size_t useComma = 0;
+                            //     for (idx_t cell : adjacents[node]) {
+                            //         if (useComma++) std::cout << ",";
+                            //         std::cout << cell;
+                            //     }
+                            //     std::cout << "}" << std::endl;
+                            // }
+                            // std::cout << "}" << std::endl;
+                            
+                            // Check for % of rows that are entirely local vs have remote memory access (non-local adjacent node)
+                            size_t remoteRows = 0;
+                            size_t remoteCells = 0;
+                            size_t totalCells = 0;
+                            size_t totalRows = 0;
+                            for (idx_t node : nodeIndices) {
+                                totalRows++;
+                                size_t remoteRow = 0;
+                                for (idx_t cell : adjacents[node]) {
+                                    if (!map->isNodeGlobalElement(cell)) {
+                                        remoteRow++;
+                                        remoteCells++;
+                                    }
+                                    totalCells++;
+                                }
+                                if (remoteRow) remoteRows++;
+                            }
+                            std::cout << "Remote Rows: " << (double) remoteRows / totalRows * 100 << "%, Remote Cells: " << (double) remoteCells / totalCells * 100 << "%" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
 
                 return false;
             }

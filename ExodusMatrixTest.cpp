@@ -16,6 +16,10 @@ int main(int argc, char *argv[]) {
             if (rank == 0) std::cerr << "No input file was provided; use the '--input' parameter!" << std::endl;
             return EXIT_FAILURE;
         }
+        if (Teuchos::size(*comm) == 1) {
+            std::cerr << "Requires at least 2 MPI Processors for this Example!" << std::endl;
+            return EXIT_FAILURE;
+        }
         ExodusIO::IO io;
         if (!io.open(inputFile, true)) {
             std::cerr << "Process #" << rank << ": Failed to open input Exodus file '" << inputFile << "'" << std::endl;
