@@ -17,6 +17,7 @@
 #include <parmetis.h>
 #include <sstream>
 #include <set>
+#include <utility>
 
 
 
@@ -25,6 +26,32 @@
 */
 
 namespace ExodusIO {
+
+    namespace TpetraUtilities {
+        template <typename LocalOrdinal = Tpetra::CrsMatrix<>::local_ordinal_type, typename GlobalOrdinal = Tpetra::CrsMatrix<>::global_ordinal_type>
+        class GhostIDHandler : public Tpetra::Details::TieBreak<LocalOrdinal, GlobalOrdinal> {
+        public:
+            bool mayHaveSideEffects() const {
+                return false;
+            }
+
+            std::size_t selectedIndex (GlobalOrdinal GID, const std::vector<std::pair<int, LocalOrdinal> >& pid_and_lid) const {
+                auto comm = Tpetra::getDefaultComm();
+                int rank = comm->getRank();
+                std::stringstream ss;
+                ss << "Process #" << rank << ": GID=" << GID << ", pid_and_lid={";
+                for (int i = 0; i < pid_and_lid.size(); i++) {
+                    if (i) ss << ",";
+                    ss << "(" << pid_and_lid[i].first << "," << pid_and_lid[i].second << ")";
+                }
+                ss << "}";
+                std::cout << ss.str() << std::endl;
+                return 0;
+            }
+
+            ~GhostIDHandler() {}
+        };
+    };
 
     class IO {
         public:
@@ -449,13 +476,15 @@ namespace ExodusIO {
                     Teuchos::barrier(*comm);
                     currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                 }
-                auto map = Tpetra::createOneToOne(currMap.getConst());
+                TpetraUtilities::GhostIDHandler<> tieBreaker;
+                auto map = Tpetra::createOneToOne(currMap.getConst(), tieBreaker);
                 if (verbose) {
                     auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
                     Teuchos::barrier(*comm);
                     map->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                 }
                 Teuchos::barrier(*comm);
+                assert(map->isOneToOne());
     
                 /////////////////////////////////////////////////////////////////////
                 // 5. Construct the nodal matrix from the constructed map.

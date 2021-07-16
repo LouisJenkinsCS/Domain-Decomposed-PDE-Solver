@@ -50,7 +50,7 @@ findPath "exodusii"
 findPath "metis"
 PARMETIS_LDFLAGS="-lparmetis"
 TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgorithms -lteuchoscore -lteuchoscomm -lteuchosparameterlist -lzoltan2 -lxpetra -lxpetra-sup -lgaleri-xpetra -lgaleri-epetra -ltpetraclassiclinalg -ltpetraclassiclinalg -lzoltan -lteuchoskokkoscomm -lteuchoskokkoscompat -lteuchosnumerics -lmetis"
-CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address"
+CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address -Woverloaded-virtual"
 
 # Build Examples
 # mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS $CCFLAGS Example1.cc -o exec/Example1
