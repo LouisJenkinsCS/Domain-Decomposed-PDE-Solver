@@ -18,8 +18,8 @@
 #include <sstream>
 #include <set>
 #include <utility>
-
-
+#include <thread>
+#include <atomic>
 
 /*
     An ExodusII wrapper that provides some C++ bindings
@@ -28,16 +28,137 @@
 namespace ExodusIO {
 
     namespace TpetraUtilities {
+
+        // Each processor simultaneously handles incoming messages (request) and sending outgoing messages (query or response).
+        // Every time `selectIndex` is called, it will continuously check if a message is available,
+        // and if so it will handle dispatching it. After processing all of the `selectIndex` calls, the process must
+        // wait for all processes to finish.
         template <typename LocalOrdinal = Tpetra::CrsMatrix<>::local_ordinal_type, typename GlobalOrdinal = Tpetra::CrsMatrix<>::global_ordinal_type>
         class GhostIDHandler : public Tpetra::Details::TieBreak<LocalOrdinal, GlobalOrdinal> {
         public:
-            bool mayHaveSideEffects() const {
-                return false;
+            GhostIDHandler(Teuchos::RCP<Tpetra::Map<LocalOrdinal, GlobalOrdinal>> map, std::map<idx_t, std::set<idx_t>>& adjacents) : map(map), adjacents(adjacents) {
+                auto comm = Tpetra::getDefaultComm();
+                
+                // Pre-compute the number of rows that an gid appears in
+                for (auto& row : adjacents) {
+                    for (auto& id : row.second) {
+                        id_to_row_count[id]++;
+                    }
+                }
+                pushNBRecv();
             }
 
+            bool mayHaveSideEffects() const {
+                return true;
+            }
+
+            void pushNBRecv() {
+                std::tuple<int8_t, MPI_Request, idx_t> op;
+                // Set first op to 1
+                std::get<0>(op) = 1;
+                // Set second op to MPI_REQUEST_NULL
+                std::get<1>(op) = MPI_REQUEST_NULL;
+                // Set third op to -1
+                std::get<2>(op) = -1;
+                MPI_Irecv(&std::get<2>(op), 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &std::get<1>(op));
+                // Add to the list of pending operations
+                pendingOperations.push_back(op);
+            }
+
+            void pollMessages(int *retval = nullptr) {
+                auto comm = Tpetra::getDefaultComm();
+                auto rank = comm->getRank();
+
+                bool pendingProcessing = true;
+                while (pendingProcessing) {
+                    pendingProcessing = false;
+                    // Iterate through all pending operations, and test to see if they are ready.
+                    // If they are ready, then just remove that node from the linked list if it is
+                    // a send (when the first tuple element is 0), and if it is a receive 
+                    // (when the first tuple element is 1) we send id_to_row_count[GID] to them.
+                    
+                    for (auto it = pendingOperations.begin(); it != pendingOperations.end(); it++) {
+                        int8_t op_type = it->first;
+                        MPI_Request *request = &it->second;
+                        idx_t optional_data = it->third;
+                        MPI_Status status;
+                        
+                        switch (op_type) {
+                            case 0: // Send
+                            {
+                                // Check if the send is ready
+                                int success = -1;
+                                if (MPI_Test(request, success, status) == MPI_SUCCESS) {
+                                    if (success) {
+                                        pendingOperations.erase(it--);
+                                    } else {
+                                        pendingProcessing = true;
+                                    }
+                                } else {
+                                    std::cerr << "Process #" << rank << ": Error = (MPI_ERROR=" << status->MPI_ERROR << ",MPI_SOURCE=" << status->MPI_SOURCE << ",MPI_TAG=" << status->MPI_TAG << ")" << std::endl;
+                                    std::abort();
+                                }
+                                continue;
+                            }
+                            case 1: // Receive
+                            {
+                                // Check if the receive is ready
+                                // Since receives are handled synchronously, we merely just setup an MPI_ANY_SOURCE
+                                // non-blocking request, so the only thing to do is to handle the query here.
+                                int success = -1;
+                                if (MPI_Test(request, success, status) == MPI_SUCCESS) {
+                                    if (success) {
+                                        pendingOperations.erase(it--);
+                                        int src = status->MPI_SOURCE;
+                                        int tag = status->MPI_TAG;
+                                        
+                                        // A (send w/ tag=0) -> B (recv w/ tag=0) -- Request
+                                        // B (send w/ tag=1) -> A (recv w/ tag=1) -- Response
+                                        // A (tag=0) -> B (tag=0 to tag=1) -> A (tag=1)
+                                        if (tag == 0) {
+                                            std::tuple<int8_t, MPI_Request, idx_t> op;
+                                            op.first = 0;
+                                            op.third = id_to_row_count[optional_data];
+                                            MPI_Isend(&op.third, 1, MPI_INT, src, 1, MPI_COMM_WORLD , &op.second);
+                                            pendingOperations.push_back(op);
+                                            pushNBRecv();
+                                            pendingProcessing = true;
+                                        } else if (tag == 1) {
+                                            if (retval) {
+                                                *retval = optional_data;
+                                            }
+                                            pushNBRecv();
+                                            pendingProcessing = true;
+                                        } else {
+                                            // Bad tag
+                                            std::cerr << "Process #" << rank << ": Bad tag = " << tag << std::endl;
+                                            std::abort();
+                                        }
+                                    } else {
+                                        pendingProcessing = true;
+                                    }
+                                } else {
+                                    std::cerr << "Process #" << rank << ": Error = (MPI_ERROR=" << status->MPI_ERROR << ",MPI_SOURCE=" << status->MPI_SOURCE << ",MPI_TAG=" << status->MPI_TAG << ")" << std::endl;
+                                    std::abort();
+                                }
+                            }
+                            default: // Error
+                            {
+                                std::cerr << "Process #" << rank << " Error: Invalid operation type in GhostIDHandler::selectedIndex" << std::endl;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Used to select which PID obtains the next ghost ID; there must be a consensus amonst all processors.
             std::size_t selectedIndex (GlobalOrdinal GID, const std::vector<std::pair<int, LocalOrdinal> >& pid_and_lid) const {
                 auto comm = Tpetra::getDefaultComm();
                 int rank = comm->getRank();
+
+                pollMessages();
+                
                 std::stringstream ss;
                 ss << "Process #" << rank << ": GID=" << GID << ", pid_and_lid={";
                 for (int i = 0; i < pid_and_lid.size(); i++) {
@@ -46,10 +167,41 @@ namespace ExodusIO {
                 }
                 ss << "}";
                 std::cout << ss.str() << std::endl;
+
+                if (pid_and_lid.size() == 1) return 0;
+                int max_gid_count = -1;
+                int max_pid = -1;
+                for (std::pair<int, LocalOrdinal>& pl : pid_and_lid) {
+                    int pid = pl.first;
+                    LocalOrdinal lid = pl.second;
+                    // To determine which process should be the next owner of the ghost ID, we need to
+                    // determine the number of rows owned by the process that contain the local ID.
+                    // The number of rows owned by the process with the smallest number of rows that contain
+                    // the local ID is the owner.
+                    
+                    int gid_count = -1;
+                    if (pid == rank) {
+                        gid_count = id_to_row_count[GID];
+                    } else {
+                        std::tuple<int8_t, MPI_Request, idx_t> op;
+                        std::get<0>(op) = 0;
+                        std::get<2>(op) = GID;
+                        MPI_Isend(&std::get<2>(op), 1, MPI_INT, pid, 0, MPI_COMM_WORLD, &std::get<1>(op));
+                        int retval = -1;
+                        while (retval == -1) {
+                            pollMessage(&retval);
+                        }
+                    }
+                }
                 return 0;
             }
 
             ~GhostIDHandler() {}
+
+            Teuchos::RCP<Tpetra::Map<LocalOrdinal, GlobalOrdinal>> map;
+            std::map<idx_t, std::set<idx_t>>& adjacents;
+            std::map<idx_t, int> id_to_row_count;
+            std::vector<std::tuple<int8_t, MPI_Request, idx_t>> pendingOperations; // (SEND|RECV, request, data (optional))
         };
     };
 
@@ -344,7 +496,7 @@ namespace ExodusIO {
                             }
                         }
                     }
-                    if (verbose) Teuchos::barrier(*comm);
+                    if (verbose) comm->barrier();
                 }
 
                 // Perform an All-To-All Exchange for each MPI Process
@@ -465,32 +617,6 @@ namespace ExodusIO {
                 // 4. Construct the Map consisting of Map indices owned by this process
                 /////////////////////////////////////////////////////////////////////
 
-                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
-                idx = 0;
-                for (auto x : nodeIndices) {
-                    indices[idx++] = x;
-                }
-                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, indices, 0, comm));
-                if (verbose) {
-                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
-                    Teuchos::barrier(*comm);
-                    currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
-                }
-                TpetraUtilities::GhostIDHandler<> tieBreaker;
-                auto map = Tpetra::createOneToOne(currMap.getConst(), tieBreaker);
-                if (verbose) {
-                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
-                    Teuchos::barrier(*comm);
-                    map->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
-                }
-                Teuchos::barrier(*comm);
-                assert(map->isOneToOne());
-    
-                /////////////////////////////////////////////////////////////////////
-                // 5. Construct the nodal matrix from the constructed map.
-                /////////////////////////////////////////////////////////////////////
-
-                
                 // A node is adjacent to another node if both belong to the same element
                 // To create the matrix, we need to know the maximum number of columns in
                 // a given row, and so we need to group nodes with their adjacent nodes
@@ -508,7 +634,28 @@ namespace ExodusIO {
                 for (auto &row : adjacents) {
                     maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
                 }
-                
+
+                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
+                idx = 0;
+                for (auto x : nodeIndices) {
+                    indices[idx++] = x;
+                }
+                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, indices, 0, comm));
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    Teuchos::barrier(*comm);
+                    currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                }
+                TpetraUtilities::GhostIDHandler<> tieBreaker(currMap, adjacents);
+                auto map = Tpetra::createOneToOne(currMap.getConst(), tieBreaker);
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    Teuchos::barrier(*comm);
+                    map->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                }
+                Teuchos::barrier(*comm);
+                assert(map->isOneToOne());
+
                 if (verbose) {
                     for (int i = 0; i < ranks; i++) {
                         if (rank == i) {
@@ -547,6 +694,10 @@ namespace ExodusIO {
                         Teuchos::barrier(*comm);
                     }
                 }
+
+                /////////////////////////////////////////////////////////////////////
+                // 5. Construct the nodal matrix from the constructed map.
+                /////////////////////////////////////////////////////////////////////
 
                 return false;
             }
