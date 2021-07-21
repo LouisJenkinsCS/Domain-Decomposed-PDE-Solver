@@ -46,13 +46,31 @@ namespace ExodusIO {
                     }
                 }
                 pushNBRecv();
+                remainingProcesses = comm->getSize() - 1;
             }
 
             bool mayHaveSideEffects() const {
                 return true;
             }
 
-            void pushNBRecv() {
+            // Will handle all pending operations (requests) until all processes have finished.
+            void handlePendingOperations() {
+                auto comm = Tpetra::getDefaultComm();
+                for (int i = 0; i < comm->getSize(); i++) {
+                    if (comm->getRank() != i) {
+                        // Fire and forget a message that states that we are finished.
+                        idx_t dummy = -1;
+                        MPI_Request request;
+                        MPI_Isend(&dummy, 1, MPI_INT, i, 2, MPI_COMM_WORLD, &request);
+                        MPI_Request_free(&request);
+                    }
+                }
+                while (remainingProcesses > 0) {
+                    pollMessages();
+                }
+            }
+
+            void pushNBRecv() const {
                 std::tuple<int8_t, MPI_Request, idx_t> op;
                 // Set first op to 1
                 std::get<0>(op) = 1;
@@ -65,7 +83,7 @@ namespace ExodusIO {
                 pendingOperations.push_back(op);
             }
 
-            void pollMessages(int *retval = nullptr) {
+            void pollMessages(int *retval = nullptr) const {
                 auto comm = Tpetra::getDefaultComm();
                 auto rank = comm->getRank();
 
@@ -78,9 +96,9 @@ namespace ExodusIO {
                     // (when the first tuple element is 1) we send id_to_row_count[GID] to them.
                     
                     for (auto it = pendingOperations.begin(); it != pendingOperations.end(); it++) {
-                        int8_t op_type = it->first;
-                        MPI_Request *request = &it->second;
-                        idx_t optional_data = it->third;
+                        int8_t op_type = std::get<0>(*it);
+                        MPI_Request *request = &std::get<1>(*it);
+                        idx_t optional_data = std::get<2>(*it);
                         MPI_Status status;
                         
                         switch (op_type) {
@@ -88,14 +106,14 @@ namespace ExodusIO {
                             {
                                 // Check if the send is ready
                                 int success = -1;
-                                if (MPI_Test(request, success, status) == MPI_SUCCESS) {
+                                if (MPI_Test(request, &success, status) == MPI_SUCCESS) {
                                     if (success) {
                                         pendingOperations.erase(it--);
                                     } else {
                                         pendingProcessing = true;
                                     }
                                 } else {
-                                    std::cerr << "Process #" << rank << ": Error = (MPI_ERROR=" << status->MPI_ERROR << ",MPI_SOURCE=" << status->MPI_SOURCE << ",MPI_TAG=" << status->MPI_TAG << ")" << std::endl;
+                                    std::cerr << "Process #" << rank << ": Error = (MPI_ERROR=" << status.MPI_ERROR << ",MPI_SOURCE=" << status.MPI_SOURCE << ",MPI_TAG=" << status.MPI_TAG << ")" << std::endl;
                                     std::abort();
                                 }
                                 continue;
@@ -106,20 +124,20 @@ namespace ExodusIO {
                                 // Since receives are handled synchronously, we merely just setup an MPI_ANY_SOURCE
                                 // non-blocking request, so the only thing to do is to handle the query here.
                                 int success = -1;
-                                if (MPI_Test(request, success, status) == MPI_SUCCESS) {
+                                if (MPI_Test(request, &success, status) == MPI_SUCCESS) {
                                     if (success) {
                                         pendingOperations.erase(it--);
-                                        int src = status->MPI_SOURCE;
-                                        int tag = status->MPI_TAG;
+                                        int src = status.MPI_SOURCE;
+                                        int tag = status.MPI_TAG;
                                         
                                         // A (send w/ tag=0) -> B (recv w/ tag=0) -- Request
                                         // B (send w/ tag=1) -> A (recv w/ tag=1) -- Response
                                         // A (tag=0) -> B (tag=0 to tag=1) -> A (tag=1)
                                         if (tag == 0) {
                                             std::tuple<int8_t, MPI_Request, idx_t> op;
-                                            op.first = 0;
-                                            op.third = id_to_row_count[optional_data];
-                                            MPI_Isend(&op.third, 1, MPI_INT, src, 1, MPI_COMM_WORLD , &op.second);
+                                            std::get<0>(op) = 0;
+                                            std::get<2>(op) = id_to_row_count[optional_data];
+                                            MPI_Isend(&std::get<2>(op), 1, MPI_INT, src, 1, MPI_COMM_WORLD , &std::get<1>(op));
                                             pendingOperations.push_back(op);
                                             pushNBRecv();
                                             pendingProcessing = true;
@@ -129,6 +147,12 @@ namespace ExodusIO {
                                             }
                                             pushNBRecv();
                                             pendingProcessing = true;
+                                        } else if (tag == 2) {
+                                            // Terminating process...
+                                            remainingProcesses--;
+                                            if (remainingProcesses) {
+                                                pushNBRecv();
+                                            }
                                         } else {
                                             // Bad tag
                                             std::cerr << "Process #" << rank << ": Bad tag = " << tag << std::endl;
@@ -138,7 +162,7 @@ namespace ExodusIO {
                                         pendingProcessing = true;
                                     }
                                 } else {
-                                    std::cerr << "Process #" << rank << ": Error = (MPI_ERROR=" << status->MPI_ERROR << ",MPI_SOURCE=" << status->MPI_SOURCE << ",MPI_TAG=" << status->MPI_TAG << ")" << std::endl;
+                                    std::cerr << "Process #" << rank << ": Error = (MPI_ERROR=" << status.MPI_ERROR << ",MPI_SOURCE=" << status.MPI_SOURCE << ",MPI_TAG=" << status.MPI_TAG << ")" << std::endl;
                                     std::abort();
                                 }
                             }
@@ -170,8 +194,9 @@ namespace ExodusIO {
 
                 if (pid_and_lid.size() == 1) return 0;
                 int max_gid_count = -1;
-                int max_pid = -1;
-                for (std::pair<int, LocalOrdinal>& pl : pid_and_lid) {
+                int max_idx = -1;
+                int idx = 0;
+                for (auto &pl : pid_and_lid) {
                     int pid = pl.first;
                     LocalOrdinal lid = pl.second;
                     // To determine which process should be the next owner of the ghost ID, we need to
@@ -181,7 +206,7 @@ namespace ExodusIO {
                     
                     int gid_count = -1;
                     if (pid == rank) {
-                        gid_count = id_to_row_count[GID];
+                        gid_count = id_to_row_count[(idx_t) GID];
                     } else {
                         std::tuple<int8_t, MPI_Request, idx_t> op;
                         std::get<0>(op) = 0;
@@ -189,9 +214,15 @@ namespace ExodusIO {
                         MPI_Isend(&std::get<2>(op), 1, MPI_INT, pid, 0, MPI_COMM_WORLD, &std::get<1>(op));
                         int retval = -1;
                         while (retval == -1) {
-                            pollMessage(&retval);
+                            pollMessages(&retval);
                         }
+                        gid_count = retval;
                     }
+                    if (gid_count > max_gid_count) {
+                        max_gid_count = gid_count;
+                        max_idx = idx;
+                    }
+                    idx++;
                 }
                 return 0;
             }
@@ -202,6 +233,7 @@ namespace ExodusIO {
             std::map<idx_t, std::set<idx_t>>& adjacents;
             std::map<idx_t, int> id_to_row_count;
             std::vector<std::tuple<int8_t, MPI_Request, idx_t>> pendingOperations; // (SEND|RECV, request, data (optional))
+            int remainingProcesses;
         };
     };
 
@@ -648,6 +680,7 @@ namespace ExodusIO {
                 }
                 TpetraUtilities::GhostIDHandler<> tieBreaker(currMap, adjacents);
                 auto map = Tpetra::createOneToOne(currMap.getConst(), tieBreaker);
+                tieBreaker.handlePendingOperations();
                 if (verbose) {
                     auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
                     Teuchos::barrier(*comm);
