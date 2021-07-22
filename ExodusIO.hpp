@@ -695,6 +695,7 @@ namespace ExodusIO {
                 MPI_Win_create(&nodeSize, sizeof(size_t), sizeof(size_t), MPI_INFO_NULL, MPI_COMM_WORLD, &nodeSizeWindow);
 
                 std::set<idx_t> ghostedNodeSet;
+                std::map<int, std::set<idx_t>> ghostedNodeMap; // rank -> set of ghosted nodes
                 for (int i = 0; i < ranks; i++) {
                     if (rank != i) {
                         MPI_Win_lock(MPI_LOCK_SHARED, i, 0, nodeSizeWindow);
@@ -702,15 +703,20 @@ namespace ExodusIO {
                         size_t theirNodeSize = 0;
                         MPI_Get(&theirNodeSize, 1, MPI_LONG, i, 0, 1, MPI_LONG, nodeSizeWindow);
                         MPI_Win_unlock(i, nodeSizeWindow);
-                        std::cout << "Process #" << i << " received theirGhostedNodesSize = " << theirNodeSize << std::endl;
+                        if (verbose) std::cout << "Process #" << i << " received theirGhostedNodesSize = " << theirNodeSize << std::endl;
                         MPI_Win_lock(MPI_LOCK_SHARED, i, 0, nodeWindow);
                         std::vector<idx_t> theirNodes(theirNodeSize);
                         MPI_Get(theirNodes.data(), theirNodeSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, i, 0, theirNodeSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, nodeWindow);
                         MPI_Win_unlock(i, nodeWindow);
                         
-                        std::set_intersection(nodeIndices.begin(), nodeIndices.end(), theirNodes.begin(), theirNodes.end(), std::inserter(ghostedNodeSet, ghostedNodeSet.end()));
+                        std::vector<idx_t> intersection;
+                        std::set_intersection(nodeIndices.begin(), nodeIndices.end(), theirNodes.begin(), theirNodes.end(), std::inserter(intersection, intersection.end()));
+                        ghostedNodeSet.insert(intersection.begin(), intersection.end());
+                        ghostedNodeMap[i].insert(intersection.begin(), intersection.end());
                     }
                 }
+                MPI_Win_free(&nodeWindow);
+                MPI_Win_free(&nodeSizeWindow);
 
                 if (verbose) {
                     for (int i = 0; i < ranks; i++) {
@@ -723,11 +729,31 @@ namespace ExodusIO {
                                 std::cout << node;
                             }
                             std::cout << "}" << std::endl;
+                            for (int j = 0; j < ranks; j++) {
+                                if (rank == j) continue;
+                                std::cout << rank << "->" << j << "(" << ghostedNodeMap[j].size() << "): {";
+                                int idx = 0;
+                                for (auto &node : ghostedNodeMap[j]) {
+                                    if (idx++) std::cout << ",";
+                                    std::cout << node;
+                                }
+                                std::cout << "}" << std::endl;
+                            }
                         }
                         Teuchos::barrier(*comm);
                     }
                 }
 
+                // Ideal: First heuristic - Process which uses the ghosted nodes the most
+                //        Second heuristic - Process with the lowest ID
+                std::map<idx_t, std::vector<int>> nodeToRank; // node -> [rank]
+                for (int i = 0; i < ranks; i++) {
+                    if (rank != i) {
+                        for (auto node : ghostedNodeMap[i]) {
+                            nodeToRank[node].push_back(i);
+                        }
+                    }
+                }
 
                 // Note: We have to send the adjacency information to the process we decide to give the vertex to, as each process
                 // only knows of elements in its own local portion of the mesh.
