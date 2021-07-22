@@ -28,6 +28,11 @@
       `directoryMap_` that is distributed contiguous and uniform, and uses it's `remoteIndexList` to redistribute
       the vertices in a way that does not respect the original map. This discards the work performed by ParMETIS to
       partition the mesh, and so we instead distribute the ghost vertices in our own way.
+    - The output decomposed mesh has some issues with more complex meshes that needs to be sorted out, in particular see
+      issue #1. The mesh should be decomposed first if possible to see if there are any issues, but the issues appear to be
+      isolated to just writing out the mesh than reading in the mesh.
+    - The process has been manually verified on the smallest and simplest mesh, data/rectangle-tris.exo, but is very likely to
+      work on other larger meshes.
 */
 
 namespace ExodusIO {
@@ -678,34 +683,55 @@ namespace ExodusIO {
                 // memory, but we relax this to allow for one process to hold all ghosted nodes at once, which
                 // is bound to be significantly smaller in size. However, to ease this along, we construct an
                 // MPI_Window to allow for one-sided fetching of each process' ghosted nodes.
-                MPI_Win ghostedNodesWindow;
-                MPI_Win ghostedNodesSizeWindow;
-                size_t ghostedNodesSize = nodeIndices.size();
-                idx_t *ghostedNodes;
-                MPI_Alloc_mem(ghostedNodesSize * sizeof(idx_t), MPI_INFO_NULL, &ghostedNodes);
-                for (int i = 0; i < ghostedNodesSize; i++) {
-                    ghostedNodes[i] = nodeIndices[i];
+                MPI_Win nodeWindow;
+                MPI_Win nodeSizeWindow;
+                size_t nodeSize = nodeIndices.size();
+                idx_t *nodes;
+                MPI_Alloc_mem(nodeSize * sizeof(idx_t), MPI_INFO_NULL, &nodes);
+                for (int i = 0; i < nodeSize; i++) {
+                    nodes[i] = nodeIndices[i];
                 }
-                MPI_Win_create(ghostedNodes, ghostedNodesSize * sizeof(idx_t), sizeof(idx_t), MPI_INFO_NULL, MPI_COMM_WORLD, &ghostedNodesWindow);
-                MPI_Win_create(&ghostedNodesSize, sizeof(size_t), sizeof(size_t), MPI_INFO_NULL, MPI_COMM_WORLD, &ghostedNodesSizeWindow);
+                MPI_Win_create(nodes, nodeSize * sizeof(idx_t), sizeof(idx_t), MPI_INFO_NULL, MPI_COMM_WORLD, &nodeWindow);
+                MPI_Win_create(&nodeSize, sizeof(size_t), sizeof(size_t), MPI_INFO_NULL, MPI_COMM_WORLD, &nodeSizeWindow);
 
-                std::set<idx_t> ourGhostedNodes(nodeIndices.begin(), nodeIndices.end());
+                std::set<idx_t> ghostedNodeSet;
                 for (int i = 0; i < ranks; i++) {
                     if (rank != i) {
-                        MPI_Win_lock(MPI_LOCK_SHARED, i, 0, ghostedNodesSizeWindow);
+                        MPI_Win_lock(MPI_LOCK_SHARED, i, 0, nodeSizeWindow);
                         // Fetch the ghosted nodes from process #i
-                        size_t theirGhostedNodesSize = 0;
-                        MPI_Get(&theirGhostedNodesSize, 1, MPI_LONG, i, 0, 1, MPI_LONG, ghostedNodesSizeWindow);
-                        MPI_Win_unlock(i, ghostedNodesSizeWindow);
-                        std::cout << "Process #" << i << " received theirGhostedNodesSize = " << theirGhostedNodesSize << std::endl;
-                        MPI_Win_lock(MPI_LOCK_SHARED, i, 0, ghostedNodesWindow);
-                        idx_t *theirGhostedNodes = new idx_t[theirGhostedNodesSize];
-                        MPI_Get(theirGhostedNodes, theirGhostedNodesSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, i, 0, theirGhostedNodesSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, ghostedNodesWindow);
-                        MPI_Win_unlock(i, ghostedNodesWindow);
-                        // Debug:
-                        std::cout << "Process #" << rank << " obtained " << theirGhostedNodesSize << " ghosted nodes from process #" << i << std::endl;
+                        size_t theirNodeSize = 0;
+                        MPI_Get(&theirNodeSize, 1, MPI_LONG, i, 0, 1, MPI_LONG, nodeSizeWindow);
+                        MPI_Win_unlock(i, nodeSizeWindow);
+                        std::cout << "Process #" << i << " received theirGhostedNodesSize = " << theirNodeSize << std::endl;
+                        MPI_Win_lock(MPI_LOCK_SHARED, i, 0, nodeWindow);
+                        std::vector<idx_t> theirNodes(theirNodeSize);
+                        MPI_Get(theirNodes.data(), theirNodeSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, i, 0, theirNodeSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, nodeWindow);
+                        MPI_Win_unlock(i, nodeWindow);
+                        
+                        std::set_intersection(nodeIndices.begin(), nodeIndices.end(), theirNodes.begin(), theirNodes.end(), std::inserter(ghostedNodeSet, ghostedNodeSet.end()));
                     }
                 }
+
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) {
+                            std::cout << "Process #" << rank << " has " << ghostedNodeSet.size() << " ghosted nodes" << std::endl;
+                            std::cout << "Ghosted Nodes: {";
+                            int idx = 0;
+                            for (auto &node : ghostedNodeSet) {
+                                if (idx++) std::cout << ",";
+                                std::cout << node;
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+
+                // Note: We have to send the adjacency information to the process we decide to give the vertex to, as each process
+                // only knows of elements in its own local portion of the mesh.
+
 
                 return false;
 
