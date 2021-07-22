@@ -22,7 +22,12 @@
 #include <atomic>
 
 /*
-    An ExodusII wrapper that provides some C++ bindings
+    Developer Notes:
+
+    - Tpetra::Map::createOneToOne cannot be used to construct the ghosted vertices as it will utilize a new
+      `directoryMap_` that is distributed contiguous and uniform, and uses it's `remoteIndexList` to redistribute
+      the vertices in a way that does not respect the original map. This discards the work performed by ParMETIS to
+      partition the mesh, and so we instead distribute the ghost vertices in our own way.
 */
 
 namespace ExodusIO {
@@ -83,6 +88,7 @@ namespace ExodusIO {
                 pendingOperations.push_back(op);
             }
 
+            // Hypothesis: Pass in stack-allocated vector of operations...
             void pollMessages(int *retval = nullptr) const {
                 auto comm = Tpetra::getDefaultComm();
                 auto rank = comm->getRank();
@@ -106,7 +112,7 @@ namespace ExodusIO {
                             {
                                 // Check if the send is ready
                                 int success = -1;
-                                if (MPI_Test(request, &success, status) == MPI_SUCCESS) {
+                                if (MPI_Test(request, &success, &status) == MPI_SUCCESS) {
                                     if (success) {
                                         pendingOperations.erase(it--);
                                     } else {
@@ -124,7 +130,7 @@ namespace ExodusIO {
                                 // Since receives are handled synchronously, we merely just setup an MPI_ANY_SOURCE
                                 // non-blocking request, so the only thing to do is to handle the query here.
                                 int success = -1;
-                                if (MPI_Test(request, &success, status) == MPI_SUCCESS) {
+                                if (MPI_Test(request, &success, &status) == MPI_SUCCESS) {
                                     if (success) {
                                         pendingOperations.erase(it--);
                                         int src = status.MPI_SOURCE;
@@ -177,7 +183,7 @@ namespace ExodusIO {
             }
 
             // Used to select which PID obtains the next ghost ID; there must be a consensus amonst all processors.
-            std::size_t selectedIndex (GlobalOrdinal GID, const std::vector<std::pair<int, LocalOrdinal> >& pid_and_lid) const {
+            std::size_t selectedIndex (GlobalOrdinal GID, const std::vector<std::pair<int, LocalOrdinal> >& pid_and_lid) const override {
                 auto comm = Tpetra::getDefaultComm();
                 int rank = comm->getRank();
 
@@ -616,7 +622,7 @@ namespace ExodusIO {
                 std::vector<idx_t> nodeIndices(ourNodes);
                 sort(nodeIndices.begin(), nodeIndices.end());
                 nodeIndices.erase(unique(nodeIndices.begin(), nodeIndices.end()), nodeIndices.end());
-
+                
                 if (verbose) {
                     for (int i = 0; i < ranks; i++) {
                         if (rank == i) {
@@ -662,22 +668,68 @@ namespace ExodusIO {
                         }
                     }
                 }
-                size_t maxColumnsPerRow = 0;
-                for (auto &row : adjacents) {
-                    maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
+
+                // To construct the Tpetra::Map, we must redistributing the ghosted nodes. Each process
+                // only has access to its own local portion of the mesh, and so you can have nodes that are
+                // contained in the elements that span multiple processes. We must therefore redistribute
+                // the ghosted nodes, and to do that we must determine which nodes are to be ghosted (i.e.
+                // take the intersection of nodes for each pair-wise process and then gather them).
+                // There is a constraint that we cannot allow a single process to hold the entire mesh in
+                // memory, but we relax this to allow for one process to hold all ghosted nodes at once, which
+                // is bound to be significantly smaller in size. However, to ease this along, we construct an
+                // MPI_Window to allow for one-sided fetching of each process' ghosted nodes.
+                MPI_Win ghostedNodesWindow;
+                MPI_Win ghostedNodesSizeWindow;
+                size_t ghostedNodesSize = nodeIndices.size();
+                idx_t *ghostedNodes;
+                MPI_Alloc_mem(ghostedNodesSize * sizeof(idx_t), MPI_INFO_NULL, &ghostedNodes);
+                for (int i = 0; i < ghostedNodesSize; i++) {
+                    ghostedNodes[i] = nodeIndices[i];
+                }
+                MPI_Win_create(ghostedNodes, ghostedNodesSize * sizeof(idx_t), sizeof(idx_t), MPI_INFO_NULL, MPI_COMM_WORLD, &ghostedNodesWindow);
+                MPI_Win_create(&ghostedNodesSize, sizeof(size_t), sizeof(size_t), MPI_INFO_NULL, MPI_COMM_WORLD, &ghostedNodesSizeWindow);
+
+                std::set<idx_t> ourGhostedNodes(nodeIndices.begin(), nodeIndices.end());
+                for (int i = 0; i < ranks; i++) {
+                    if (rank != i) {
+                        MPI_Win_lock(MPI_LOCK_SHARED, i, 0, ghostedNodesSizeWindow);
+                        // Fetch the ghosted nodes from process #i
+                        size_t theirGhostedNodesSize = 0;
+                        MPI_Get(&theirGhostedNodesSize, 1, MPI_LONG, i, 0, 1, MPI_LONG, ghostedNodesSizeWindow);
+                        MPI_Win_unlock(i, ghostedNodesSizeWindow);
+                        std::cout << "Process #" << i << " received theirGhostedNodesSize = " << theirGhostedNodesSize << std::endl;
+                        MPI_Win_lock(MPI_LOCK_SHARED, i, 0, ghostedNodesWindow);
+                        idx_t *theirGhostedNodes = new idx_t[theirGhostedNodesSize];
+                        MPI_Get(theirGhostedNodes, theirGhostedNodesSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, i, 0, theirGhostedNodesSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, ghostedNodesWindow);
+                        MPI_Win_unlock(i, ghostedNodesWindow);
+                        // Debug:
+                        std::cout << "Process #" << rank << " obtained " << theirGhostedNodesSize << " ghosted nodes from process #" << i << std::endl;
+                    }
                 }
 
-                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
-                idx = 0;
-                for (auto x : nodeIndices) {
-                    indices[idx++] = x;
-                }
+                return false;
+
+                // size_t maxColumnsPerRow = 0;
+                // for (auto &row : adjacents) {
+                //     maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
+                // }
+
+                // Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
+                // idx = 0;
+                // for (auto x : nodeIndices) {
+                //     indices[idx++] = x;
+                // }
+                
+                // Note: createOneToOne creates a new Tpetra::Map, which would discard the original
+                // partitioning, given to use by ParMETIS... can't use this...
+                /*
                 auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, indices, 0, comm));
                 if (verbose) {
                     auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
                     Teuchos::barrier(*comm);
                     currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                 }
+                
                 TpetraUtilities::GhostIDHandler<> tieBreaker(currMap, adjacents);
                 auto map = Tpetra::createOneToOne(currMap.getConst(), tieBreaker);
                 tieBreaker.handlePendingOperations();
@@ -688,7 +740,9 @@ namespace ExodusIO {
                 }
                 Teuchos::barrier(*comm);
                 assert(map->isOneToOne());
-
+                */ 
+            
+            /*
                 if (verbose) {
                     for (int i = 0; i < ranks; i++) {
                         if (rank == i) {
@@ -732,7 +786,7 @@ namespace ExodusIO {
                 // 5. Construct the nodal matrix from the constructed map.
                 /////////////////////////////////////////////////////////////////////
 
-                return false;
+                return false;*/
             }
 
             // Reads in the partitioning of the Exodus file specified in `open` and calls
