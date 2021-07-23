@@ -755,6 +755,163 @@ namespace ExodusIO {
                     }
                 }
 
+                // Compute the frequency in which each ghost node is used and send it to the processes that
+                // share that particular ghosted node. We create a two vectors, one holding the ghost node
+                // ids, and one holding the frequency, which are both sent. 
+                std::map<idx_t, int> nodeToFreq;
+                for (auto& row : adjacents) {
+                    for (auto& id : row.second) {
+                        nodeToFreq[id]++;
+                    }
+                }
+
+                std::vector<std::pair<std::vector<idx_t>, std::vector<int>>> idFreqPair(ranks);
+                for (auto &nodeRanks : nodeToRank) {
+                    idx_t node = nodeRanks.first;
+                    std::vector<int> &rankList = nodeRanks.second;
+                    for (auto &rank : rankList) {
+                        idFreqPair[rank].first.push_back(node);
+                        idFreqPair[rank].second.push_back(nodeToFreq[node]);
+                    }
+                }
+
+                // Now that we have computed the frequencies to be sent for each processor, we send them.
+                // Phase 1: Send out all node list and frequencies (size -> nodeList -> freqList)
+                std::vector<MPI_Request> requests(3 * (ranks - 1));
+                for (int i = 0; i < ranks; i++) {
+                    std::vector<idx_t> &nodeList = idFreqPair[i].first;
+                    std::vector<int> &freqList = idFreqPair[i].second;
+                    size_t nodeSize = nodeList.size();
+                    size_t freqSize = freqList.size();
+                    assert(nodeSize == freqSize);
+
+                    MPI_Isend(&nodeSize, 1, MPI_LONG, i, 0, MPI_COMM_WORLD, &requests[i * 3]);
+                    MPI_Isend(nodeList.data(), nodeSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, i, 0, MPI_COMM_WORLD, &requests[i * 3 + 1]);
+                    MPI_Isend(freqList.data(), freqSize, MPI_INT, i, 0, MPI_COMM_WORLD, &requests[i * 3 + 2]);          
+                }
+
+                // Wait for all the messages to be sent
+                assert(MPI_Waitall(3 * (ranks - 1), requests.data(), MPI_STATUSES_IGNORE) == MPI_SUCCESS);
+
+                // Phase 2: Receive all node list and frequencies (size -> nodeList -> freqList)
+                std::vector<std::pair<std::vector<idx_t>, std::vector<int>>> idFreqPairReceived(ranks);
+                for (int i = 0; i < ranks; i++) {
+                    if (rank == i) continue;
+
+                    std::vector<idx_t> &nodeList = idFreqPairReceived[i].first;
+                    std::vector<int> &freqList = idFreqPairReceived[i].second;
+                    size_t nodeSize;
+                    MPI_Recv(&nodeSize, 1, MPI_LONG, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    nodeList.resize(nodeSize);
+                    MPI_Recv(nodeList.data(), nodeSize, sizeof(idx_t) == 4 ? MPI_INT : MPI_LONG, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    freqList.resize(nodeSize);
+                    MPI_Recv(freqList.data(), nodeSize, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                }
+
+                // Now that we have the frequency information, begin pruning the indices that we do not own.
+                // For any node indices, compare our frequency to that of other processes. If our frequency is
+                // less than that of the other process, then we do not own that node.
+                std::vector<int> nodeIndicesToRemove;
+                for (auto &id : nodeIndices) {
+                    int freq = nodeToFreq[id];
+                    bool maxFreq = true;
+                    int owningRank = rank;
+
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) continue;
+
+                        // TODO: If nodeList is sorted, we can just do a binary search for O(log(n)) time complexity!
+                        std::vector<idx_t> &nodeList = idFreqPairReceived[i].first;
+                        std::vector<int> &freqList = idFreqPairReceived[i].second;
+                        int idx = 0;
+                        for (auto &node : nodeList) {
+                            if (node == id) {
+                                if (freq > freqList[idx]) {
+                                    // Good, do nothing
+                                } else if (freq < freqList[idx]) {
+                                    // Note: If we ever need to figure out which rank owns the ghosted node, we can do so here...
+                                    maxFreq = false;
+                                } else { // freq == freqList[idx]
+                                    owningRank = std::min(rank, i);
+                                }
+                                break;
+                            }
+                            idx++;
+                        }
+                    }
+
+                    if (!maxFreq || owningRank != rank) {
+                        nodeIndicesToRemove.push_back(id);
+                    }
+                }
+
+                // Remove indices by swapping with the end and pop_back
+                for (auto id : nodeIndicesToRemove) {
+                    nodeIndices.erase(std::remove(nodeIndices.begin(), nodeIndices.end(), id));
+                }
+
+                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
+                idx = 0;
+                for (auto x : nodeIndices) {
+                    indices[idx++] = x;
+                }
+                
+                // Note: createOneToOne creates a new Tpetra::Map, which would discard the original
+                // partitioning, given to use by ParMETIS... can't use this...
+                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, indices, 0, comm));
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    Teuchos::barrier(*comm);
+                    currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                    Teuchos::barrier(*comm);
+                }
+
+                size_t maxColumnsPerRow = 0;
+                for (auto &row : adjacents) {
+                    maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
+                }
+
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) {
+                            std::cout << "Process #" << rank << " has " << maxColumnsPerRow << " maximum row length!" << std::endl;
+                            // std::cout << "Rows: {" << std::endl;
+                            // for (idx_t node : nodeIndices) {
+                            //     std::cout << "\tRow #" << node << ": {";
+                            //     size_t useComma = 0;
+                            //     for (idx_t cell : adjacents[node]) {
+                            //         if (useComma++) std::cout << ",";
+                            //         std::cout << cell;
+                            //     }
+                            //     std::cout << "}" << std::endl;
+                            // }
+                            // std::cout << "}" << std::endl;
+                            
+                            // Check for % of rows that are entirely local vs have remote memory access (non-local adjacent node)
+                            size_t remoteRows = 0;
+                            size_t remoteCells = 0;
+                            size_t totalCells = 0;
+                            size_t totalRows = 0;
+                            for (idx_t node : nodeIndices) {
+                                totalRows++;
+                                size_t remoteRow = 0;
+                                for (idx_t cell : adjacents[node]) {
+                                    if (!currMap->isNodeGlobalElement(cell)) {
+                                        remoteRow++;
+                                        remoteCells++;
+                                    }
+                                    totalCells++;
+                                }
+                                if (remoteRow) remoteRows++;
+                            }
+                            std::cout << "Remote Rows: " << (double) remoteRows / totalRows * 100 << "%, Remote Cells: " << (double) remoteCells / totalCells * 100 << "%" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                assert(currMap->isOneToOne());
+
                 // Note: We have to send the adjacency information to the process we decide to give the vertex to, as each process
                 // only knows of elements in its own local portion of the mesh.
 
