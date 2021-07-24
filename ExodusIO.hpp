@@ -33,6 +33,15 @@
       isolated to just writing out the mesh than reading in the mesh.
     - The process has been manually verified on the smallest and simplest mesh, data/rectangle-tris.exo, but is very likely to
       work on other larger meshes.
+    
+    METIS:
+    
+    TODO: Description
+
+
+    ParMETIS:
+    
+    TODO: Description
 */
 
 namespace ExodusIO {
@@ -1334,36 +1343,32 @@ namespace ExodusIO {
 
                 if (npart[0] == -2) npart[0] = 0;
 
-                std::vector<idx_t> elembin[nparts + 1];
+                std::vector<idx_t> elembin[nparts];
+                idx_t idx = 0;
                 for (idx_t i=0; i<params.num_elem_blk; i++) {
                     if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype,&num_elem_in_block,&num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) return false;
     
                     idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
                     ex_get_elem_conn(readFID, ids[i], connect);
-                    idx_t idx = 0;
                     idx_t part = epart[idx];
+
+                    // For each element in the block, find the partition it belongs to and add it to that bin
                     for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j++) {
-                        // Check if every node in this block is in the same partition...
-                        if (npart[connect[j]-1] != part && false) {
-                            j += num_nodes_per_elem - (j % num_nodes_per_elem) - 1;
-                            elembin[nparts].push_back(idx);
-                            // Update current partition with next element; check for out-of-bounds
-                            if (idx + 1 < num_elem_in_block) part = epart[++idx];
-                            continue;
-                        }
+                        // We have reached the end of an element; assign it the index `idx` and move it into the elembin of that partition
                         if ((j+1) % num_nodes_per_elem == 0) {
+                            // Element owns this element (which is the `idx`th element)
                             elembin[part].push_back(idx);
-                            // Update current partition with next element; check for out-of-bounds
-                            if (idx + 1 < num_elem_in_block) part = epart[++idx];
+                            // Check if we are processing the last element in this block; if not,
+                            // then we move on to the next partition (bounds-checking)
+                            if ((idx + 1) < params.num_elem) part = epart[++idx];
                         }
                     }
                     delete[] connect;
                 }
 
                 if (verbose) {    
-                    for (idx_t i = 0; i < nparts + 1; i++) {
-                        if (i == nparts) std::cout << "Any Partition(" << elembin[i].size() << "): [";
-                        else std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
+                    for (idx_t i = 0; i < nparts; i++) {
+                        std::cout << "Partition #" << i << "("<< elembin[i].size() <<"): [";
                         for (idx_t j = 0; j < elembin[i].size(); j++) {
                             if (j) std::cout << ",";
                             std::cout << elembin[i][j];
@@ -1373,7 +1378,7 @@ namespace ExodusIO {
                 }
 
                 idx_t numparts = 0;
-                for (idx_t i = 0; i < nparts + 1; i++) {
+                for (idx_t i = 0; i < nparts; i++) {
                     idx_t num_nodes_per_elem = -1;
                     for (idx_t elemIdx : elembin[i]) {
                         num_nodes_per_elem = elementsIdx[elemIdx + 1] - elementsIdx[elemIdx];
@@ -1443,7 +1448,7 @@ namespace ExodusIO {
 
                 // Write new element blocks
                 idx_t currPart = 0;
-                for (idx_t i = 0; i < nparts + 1; i++) {
+                for (idx_t i = 0; i < nparts; i++) {
                     size_t num_elems_per_block = elembin[i].size();
                     idx_t num_nodes_per_elem = -1;
                     if (num_nodes_per_elem == 0 && i == nparts) continue;
