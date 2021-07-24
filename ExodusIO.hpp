@@ -630,7 +630,7 @@ namespace ExodusIO {
                                     // Note: If we ever need to figure out which rank owns the ghosted node, we can do so here...
                                     maxFreq = false;
                                 } else { // freq == freqList[idx]
-                                    owningRank = std::min(rank, i);
+                                    owningRank = std::min(owningRank, std::min(rank, i));
                                 }
                                 break;
                             }
@@ -708,7 +708,33 @@ namespace ExodusIO {
                     }
                 }
 
+                // Debugging Code: Gather all nodeIndices on a single rank and check for duplicates
+                if (verbose) {
+                    if (rank == 0) {
+                        std::set<idx_t> debugSet(nodeIndices.begin(), nodeIndices.end());
+                        for (int i = 0; i < ranks; i++) {
+                            if (rank == i) continue;
+                            int sz = 0;
+                            MPI_Recv(&sz, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                            std::vector<idx_t> recv(sz);
+                            MPI_Recv(recv.data(), sz, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                            for (auto id : recv) {
+                                if (debugSet.find(id) != debugSet.end()) {
+                                    std::cout << "Duplicate node index " << id << " on process " << i << std::endl;
+                                } else {
+                                    debugSet.insert(id);
+                                }
+                            }
+                        }
+                    } else {
+                        int sz = nodeIndices.size();
+                        MPI_Send(&sz, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+                        MPI_Send(nodeIndices.data(), sz, MPI_INT, 0, 0, MPI_COMM_WORLD);
+                    }
+                }
+
                 assert(currMap->isOneToOne());
+
 
                 // Note: insertGlobalValues will add the values together, resulting in values that are not -1,
                 // which would not be compliant with a Laplacian matrix. So we need to call completeFill
