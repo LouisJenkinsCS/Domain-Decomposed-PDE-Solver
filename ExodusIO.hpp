@@ -739,17 +739,6 @@ namespace ExodusIO {
                 // 5. Construct the nodal matrix from the constructed map.
                 /////////////////////////////////////////////////////////////////////
 
-                size_t maxColumnsPerRow = 0;
-                for (auto &row : adjacents) {
-                    maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
-                }
-
-                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
-                idx = 0;
-                for (auto x : nodeIndices) {
-                    indices[idx++] = x;
-                }
-
                 // Note: insertGlobalValues will add the values together, resulting in values that are not -1,
                 // which would not be compliant with a Laplacian matrix. So we need to call completeFill
                 // to force communication and global coherence of the matrix, and then resumeFill so that we can
@@ -758,8 +747,52 @@ namespace ExodusIO {
                 // Note: We have to send the adjacency information to the process we decide to give the vertex to, as each process
                 // only knows of elements in its own local portion of the mesh.
 
+                // maxColumnsPerRow + 1 due to including degree along the diagonal
+                auto matrix = Teuchos::rcp(new Tpetra::CrsMatrix<>(map, maxColumnsPerRow+1));
+                
+                // Add all elements to the matrix and force communication
+                for (auto &idxRow : adjacents) {
+                    idx_t id = idxRow.first;
+                    auto &row = idxRow.second;
+                    Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(row.size() + 1);
+                    Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(row.size() + 1);
+                    int idx = 0;
+                    for (auto cell : row) {
+                        cols[idx] = cell;
+                        vals[idx++] = -1;
+                    }
+                    cols[idx] = id;
+                    vals[idx] = row.size();
+                    matrix->insertGlobalValues(id, cols, vals);
+                }
+                matrix->fillComplete(map, map);
 
-                return false;
+
+                matrix->resumeFill();
+                for (auto row : nodeIndices) {
+                    Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(matrix->getNumEntriesInGlobalRow(row));
+                    Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(matrix->getNumEntriesInGlobalRow(row));
+                    size_t sz;
+                    matrix->getGlobalRowCopy(row, cols, vals, sz);
+                    for (int i = 0; i < cols.size(); i++) {
+                        if (vals[i] > 0) {
+                            vals[i] = vals.size() - 1;
+                        } else {
+                            vals[i] = -1;
+                        }
+                    }
+                    matrix->replaceGlobalValues(row, cols, vals);
+                }
+                matrix->fillComplete(map, map);
+                
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    matrix->describe(*ostr, Teuchos::EVerbosityLevel::VERB_MEDIUM);
+                    Teuchos::barrier(*comm);
+                }
+                
+                *ret = matrix;
+                return true;
             }
 
             // Reads in the partitioning of the Exodus file specified in `open` and calls
