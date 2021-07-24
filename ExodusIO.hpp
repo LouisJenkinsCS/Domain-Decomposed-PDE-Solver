@@ -656,11 +656,11 @@ namespace ExodusIO {
                 
                 // Note: createOneToOne creates a new Tpetra::Map, which would discard the original
                 // partitioning, given to use by ParMETIS... can't use this...
-                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, indices, 0, comm));
+                auto map = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, indices, 0, comm));
                 if (verbose) {
                     auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
                     Teuchos::barrier(*comm);
-                    currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                    map->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                     Teuchos::barrier(*comm);
                 }
 
@@ -669,118 +669,6 @@ namespace ExodusIO {
                     maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
                 }
 
-                if (verbose) {
-                    for (int i = 0; i < ranks; i++) {
-                        if (rank == i) {
-                            std::cout << "Process #" << rank << " has " << maxColumnsPerRow << " maximum row length!" << std::endl;
-                            // std::cout << "Rows: {" << std::endl;
-                            // for (idx_t node : nodeIndices) {
-                            //     std::cout << "\tRow #" << node << ": {";
-                            //     size_t useComma = 0;
-                            //     for (idx_t cell : adjacents[node]) {
-                            //         if (useComma++) std::cout << ",";
-                            //         std::cout << cell;
-                            //     }
-                            //     std::cout << "}" << std::endl;
-                            // }
-                            // std::cout << "}" << std::endl;
-                            
-                            // Check for % of rows that are entirely local vs have remote memory access (non-local adjacent node)
-                            size_t remoteRows = 0;
-                            size_t remoteCells = 0;
-                            size_t totalCells = 0;
-                            size_t totalRows = 0;
-                            for (idx_t node : nodeIndices) {
-                                totalRows++;
-                                size_t remoteRow = 0;
-                                for (idx_t cell : adjacents[node]) {
-                                    if (!currMap->isNodeGlobalElement(cell)) {
-                                        remoteRow++;
-                                        remoteCells++;
-                                    }
-                                    totalCells++;
-                                }
-                                if (remoteRow) remoteRows++;
-                            }
-                            std::cout << "Remote Rows: " << (double) remoteRows / totalRows * 100 << "%, Remote Cells: " << (double) remoteCells / totalCells * 100 << "%" << std::endl;
-                        }
-                        Teuchos::barrier(*comm);
-                    }
-                }
-
-                // Debugging Code: Gather all nodeIndices on a single rank and check for duplicates
-                if (verbose) {
-                    if (rank == 0) {
-                        std::set<idx_t> debugSet(nodeIndices.begin(), nodeIndices.end());
-                        for (int i = 0; i < ranks; i++) {
-                            if (rank == i) continue;
-                            int sz = 0;
-                            MPI_Recv(&sz, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                            std::vector<idx_t> recv(sz);
-                            MPI_Recv(recv.data(), sz, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                            for (auto id : recv) {
-                                if (debugSet.find(id) != debugSet.end()) {
-                                    std::cout << "Duplicate node index " << id << " on process " << i << std::endl;
-                                } else {
-                                    debugSet.insert(id);
-                                }
-                            }
-                        }
-                    } else {
-                        int sz = nodeIndices.size();
-                        MPI_Send(&sz, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
-                        MPI_Send(nodeIndices.data(), sz, MPI_INT, 0, 0, MPI_COMM_WORLD);
-                    }
-                }
-
-                assert(currMap->isOneToOne());
-
-
-                // Note: insertGlobalValues will add the values together, resulting in values that are not -1,
-                // which would not be compliant with a Laplacian matrix. So we need to call completeFill
-                // to force communication and global coherence of the matrix, and then resumeFill so that we can
-                // use `replaceGlobalValues` to fix the values back to -1 (using getView).
-
-                // Note: We have to send the adjacency information to the process we decide to give the vertex to, as each process
-                // only knows of elements in its own local portion of the mesh.
-
-
-                return false;
-
-                // size_t maxColumnsPerRow = 0;
-                // for (auto &row : adjacents) {
-                //     maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
-                // }
-
-                // Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
-                // idx = 0;
-                // for (auto x : nodeIndices) {
-                //     indices[idx++] = x;
-                // }
-                
-                // Note: createOneToOne creates a new Tpetra::Map, which would discard the original
-                // partitioning, given to use by ParMETIS... can't use this...
-                /*
-                auto currMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, indices, 0, comm));
-                if (verbose) {
-                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
-                    Teuchos::barrier(*comm);
-                    currMap->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
-                }
-                
-                TpetraUtilities::GhostIDHandler<> tieBreaker(currMap, adjacents);
-                auto map = Tpetra::createOneToOne(currMap.getConst(), tieBreaker);
-                tieBreaker.handlePendingOperations();
-                if (verbose) {
-                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
-                    Teuchos::barrier(*comm);
-                    map->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
-                }
-                Teuchos::barrier(*comm);
-                assert(map->isOneToOne());
-                */ 
-            
-            /*
                 if (verbose) {
                     for (int i = 0; i < ranks; i++) {
                         if (rank == i) {
@@ -820,11 +708,58 @@ namespace ExodusIO {
                     }
                 }
 
+                // Debugging Code: Gather all nodeIndices on a single rank and check for duplicates
+                if (verbose) {
+                    if (rank == 0) {
+                        std::set<idx_t> debugSet(nodeIndices.begin(), nodeIndices.end());
+                        for (int i = 0; i < ranks; i++) {
+                            if (rank == i) continue;
+                            int sz = 0;
+                            MPI_Recv(&sz, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                            std::vector<idx_t> recv(sz);
+                            MPI_Recv(recv.data(), sz, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                            for (auto id : recv) {
+                                if (debugSet.find(id) != debugSet.end()) {
+                                    std::cout << "Duplicate node index " << id << " on process " << i << std::endl;
+                                } else {
+                                    debugSet.insert(id);
+                                }
+                            }
+                        }
+                    } else {
+                        int sz = nodeIndices.size();
+                        MPI_Send(&sz, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+                        MPI_Send(nodeIndices.data(), sz, MPI_INT, 0, 0, MPI_COMM_WORLD);
+                    }
+                }
+
+                assert(map->isOneToOne());
+
                 /////////////////////////////////////////////////////////////////////
                 // 5. Construct the nodal matrix from the constructed map.
                 /////////////////////////////////////////////////////////////////////
 
-                return false;*/
+                size_t maxColumnsPerRow = 0;
+                for (auto &row : adjacents) {
+                    maxColumnsPerRow = std::max(maxColumnsPerRow, row.second.size());
+                }
+
+                Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> indices(nodeIndices.size());
+                idx = 0;
+                for (auto x : nodeIndices) {
+                    indices[idx++] = x;
+                }
+
+                // Note: insertGlobalValues will add the values together, resulting in values that are not -1,
+                // which would not be compliant with a Laplacian matrix. So we need to call completeFill
+                // to force communication and global coherence of the matrix, and then resumeFill so that we can
+                // use `replaceGlobalValues` to fix the values back to -1 (using getView).
+
+                // Note: We have to send the adjacency information to the process we decide to give the vertex to, as each process
+                // only knows of elements in its own local portion of the mesh.
+
+
+                return false;
             }
 
             // Reads in the partitioning of the Exodus file specified in `open` and calls
