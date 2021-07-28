@@ -92,7 +92,7 @@ public:
         // progress requires computing a residual, which can be expensive.
         // However, if you don't compute the residual often enough, you
         // might keep iterating even after you've converged.
-        const int reportFrequency = 10;
+        const int reportFrequency = 50;
         // Do the power method, until the method has converged or the
         // maximum iteration count has been reached.
         for (int iter = 0; iter < niters; ++iter) {

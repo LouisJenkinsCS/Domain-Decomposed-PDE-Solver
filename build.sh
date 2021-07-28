@@ -49,17 +49,11 @@ findPath "netcdf-c"
 findPath "exodusii"
 findPath "metis"
 PARMETIS_LDFLAGS="-lparmetis"
-TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgorithms -lteuchoscore -lteuchoscomm -lteuchosparameterlist -lzoltan2 -lxpetra -lxpetra-sup -lgaleri-xpetra -lgaleri-epetra -ltpetraclassiclinalg -ltpetraclassiclinalg -lzoltan -lteuchoskokkoscomm -lteuchoskokkoscompat -lteuchosnumerics -lmetis"
+TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgorithms -lteuchoscore -lteuchoscomm -lteuchosparameterlist -lzoltan2 -lxpetra -lxpetra-sup -lgaleri-xpetra -lgaleri-epetra -ltpetraclassiclinalg -ltpetraclassiclinalg -lzoltan -lteuchoskokkoscomm -lteuchoskokkoscompat -lteuchosnumerics -lmetis -lmuelu -lbelos -lbelostpetra -lmuelu-adapters -lmuelu-interface"
 CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address -Woverloaded-virtual"
 
-# Build Examples
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS $CCFLAGS Example1.cc -o exec/Example1
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS $CCFLAGS Example2.cc -o exec/Example2
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $CCFLAGS $TRILINOS_LDFLAGS $CCFLAGS Example3.cc -o exec/Example3
-# mpic++ -I$TRILINOS_INCLUDE -I$PARMETIS_INCLUDE -L$TRILINOS_LIB -L$PARMETIS_LIB $CCFLAGS $TRILINOS_LDFLAGS $PARMETIS_LDFLAGS Example4.cc -o exec/Example4
-# mpic++ -I$TRILINOS_INCLUDE -I$PARMETIS_INCLUDE -L$TRILINOS_LIB -L$PARMETIS_LIB $CCFLAGS $TRILINOS_LDFLAGS $PARMETIS_LDFLAGS SimpleExampleImpl.cc -o exec/SimpleExampleImpl
-# g++-11 -Wall -lexodus -I/usr/local/Cellar/open-mpi/4.1.1_2/include/ -I$NETCDF_INCLUDE -I$EXODUSII_INCLUDE -L$EXODUSII_LIB $CCFLAGS ExodusMWE.cpp -o exec/ExodusMWE
-
-mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusIODecomposeTest.cpp -o exec/ExodusIODecomposeTest
-mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusDualMatrixTest.cpp -o exec/ExodusDualMatrixTest
-mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusMatrixTest.cpp -o exec/ExodusMatrixTest
+# Compile
+# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusIODecomposeTest.cpp -o exec/ExodusIODecomposeTest
+# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusDualMatrixTest.cpp -o exec/ExodusDualMatrixTest
+# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusMatrixTest.cpp -o exec/ExodusMatrixTest
+mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis BelosMueLuSolver.cpp -o exec/BelosMueLuSolver
