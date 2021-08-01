@@ -49,7 +49,7 @@ findPath "netcdf-c"
 findPath "exodusii"
 findPath "metis"
 PARMETIS_LDFLAGS="-lparmetis"
-TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgorithms -lteuchoscore -lteuchoscomm -lteuchosparameterlist -lzoltan2 -lxpetra -lxpetra-sup -lgaleri-xpetra -lgaleri-epetra -ltpetraclassiclinalg -ltpetraclassiclinalg -lzoltan -lteuchoskokkoscomm -lteuchoskokkoscompat -lteuchosnumerics -lmetis -lmuelu -lbelos -lbelostpetra -lmuelu-adapters -lmuelu-interface"
+TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgorithms -lteuchoscore -lteuchoscomm -lteuchosparameterlist -lzoltan2 -lxpetra -lxpetra-sup -lgaleri-xpetra -lgaleri-epetra -ltpetraclassiclinalg -ltpetraclassiclinalg -lzoltan -lteuchoskokkoscomm -lteuchoskokkoscompat -lteuchosnumerics -lmetis -lmuelu -lbelos -lbelostpetra -lmuelu-adapters -lmuelu-interface -lifpack2"
 CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address -Woverloaded-virtual"
 
 # Compile
