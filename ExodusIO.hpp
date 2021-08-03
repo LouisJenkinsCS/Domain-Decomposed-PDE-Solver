@@ -45,9 +45,7 @@
 
     ExodusII:
 
-    - When viewing a mesh in Cubit, the node ids may differ from the original ids in some way but they are in fact isomorphic.
-      It has been verified on the smaller rectangle-tris-boundary.exo mesh that the nodesets conntain the correct ids, but if you
-      happen to compare the decomposed and the original mesh, you may see some differences in ids, but it should be structurally the same.
+    TODO: Description
 */
 
 namespace ExodusIO {
@@ -1316,6 +1314,11 @@ namespace ExodusIO {
                 for (idx_t i = 0; i < num_info; i++) {
                     delete[] info[i];
                 }
+
+                // Write node maps
+                int *node_map = new int[params.num_nodes];
+                ex_get_node_num_map(readFID, node_map);
+                ex_put_node_num_map(writeFID, node_map);
 
                 return true;
             }
