@@ -798,6 +798,51 @@ namespace ExodusIO {
                 }
                 
                 *ret = matrix;
+
+                // We must return the nodeset information for this mesh, as it is used for specifying boundary
+                // conditions. We create a mapping of each id to the set of nodes in that nodeset, but only if
+                // that node belongs to our local process.
+                std::map<int, std::set<idx_t>> nodeSetMap;
+                ids = new int[params.num_node_sets];
+                ex_get_ids(readFID, EX_NODE_SET, ids);
+                
+                for (idx_t i = 0; i < params.num_node_sets; i++) {
+                    idx_t num_nodes_in_set = -1, num_df_in_set = -1;
+                    assert(!ex_get_set_param(readFID, EX_NODE_SET, ids[i], &num_nodes_in_set, &num_df_in_set));
+                                    
+                    idx_t *node_list = new idx_t[num_nodes_in_set];
+                    real_t *dist_fact = new real_t[num_nodes_in_set];
+
+                
+                    assert(!ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL));
+                    
+                    for (int j = 0; j < num_nodes_in_set; j++) {
+                        if (map->isNodeGlobalElement(node_list[j])) {
+                            nodeSetMap[ids[i]].insert(node_list[j]);
+                        }
+                    }
+                    delete[] node_list;
+                    delete[] dist_fact;
+                }
+                delete[] ids;
+
+                for (int i = 0; i < ranks; i++) {
+                    if (i == rank) {
+                        std::cout << "Process #" << rank << " has " << nodeSetMap.size() << " node sets" << std::endl;
+                        for (auto &idSet : nodeSetMap) {
+                            std::cout << "Nodeset #" << idSet.first << " (" << idSet.second.size() << "): {";
+                            int idx = 0;
+                            for (auto id : idSet.second) {
+                                if (idx++) std::cout << ",";
+                                std::cout << id;
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                    }
+                    Teuchos::barrier(*comm);
+                }
+
+
                 return true;
             }
 
