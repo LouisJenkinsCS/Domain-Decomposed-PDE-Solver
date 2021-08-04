@@ -22,9 +22,12 @@ void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, bool s
             Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(matrix->getNumEntriesInGlobalRow(row));
             size_t sz;
             matrix->getGlobalRowCopy(row, cols, vals, sz);
+            std::vector<std::pair<Tpetra::CrsMatrix<>::global_ordinal_type, Tpetra::CrsMatrix<>::scalar_type>> entries;
+            for (size_t i = 0; i < cols.size(); i++) entries.push_back(std::make_pair(cols[i], vals[i]));
+            std::sort(entries.begin(), entries.end());
             for (int i = 0; i < cols.size(); i++) {
                 if (i) std::cout << ",";
-                std::cout << "(" << i << "," << vals[i] << ")";
+                std::cout << "(" << entries[i].first << "," << entries[i].second << ")";
             }
             std::cout << "]" << std::endl;
             std::flush(std::cout);
