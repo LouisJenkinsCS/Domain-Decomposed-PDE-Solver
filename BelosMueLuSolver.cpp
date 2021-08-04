@@ -165,8 +165,26 @@ int main(int argc, char *argv[]) {
         Teuchos::RCP<Tpetra::MultiVector<>> X = Teuchos::rcp(new Tpetra::MultiVector<>(ret->getDomainMap(),1));
         Teuchos::RCP<Tpetra::MultiVector<>> B = Teuchos::rcp(new Tpetra::MultiVector<>(ret->getRangeMap(),1));
         B->putScalar(0);
+        
+        // Setup B from nodeSetMap
+        {
+            auto data = B->get1dViewNonConst();
+            auto map = B->getMap();
+            for (auto &it : nodeSetMap) {
+                auto nid = it.first;
+                auto &set = it.second;
+                for (auto idx : set) {
+                    data[map->getLocalElement(idx)] = (double) nid;
+                }
+            }
+        }
+
+        if (rank == 0)  std::cout << "Printing out multivector B" << std::endl;
+        printMultiVector(B);
+
         srand(time(NULL));
         X->randomize();
+        if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
         printMultiVector(X);
         belosSolver(ret, X, B, numIterations, tolerance);
     }
