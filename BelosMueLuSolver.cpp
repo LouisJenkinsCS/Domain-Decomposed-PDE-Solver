@@ -17,7 +17,7 @@ void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, bool s
 
     for (int row = 0; row < rows; row++) {
         if (map->isNodeGlobalElement(row)) {
-            std::cout << "Process #:" << rank << " [";
+            std::cout << "Process #" << rank << ": [";
             Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(matrix->getNumEntriesInGlobalRow(row));
             Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(matrix->getNumEntriesInGlobalRow(row));
             size_t sz;
@@ -52,7 +52,7 @@ void printMultiVector(const Teuchos::RCP<const Tpetra::MultiVector<>> X) {
 
         for (int row = 0; row < vec->getGlobalLength(); row++) {
             if (vec->getMap()->isNodeGlobalElement(row)) {
-                std::cout << "\t[";
+                std::cout << "\tProcess #" << rank << ": [";
                 std::cout << copy[vec->getMap()->getLocalElement(row)];
                 std::cout << "]" << std::endl;
                 std::flush(std::cout);
@@ -86,7 +86,7 @@ void belosSolver(const Teuchos::RCP<Tpetra::CrsMatrix<>> _A, const Teuchos::RCP<
     Teuchos::RCP<Belos::SolverManager<double, Tpetra::MultiVector<>, Tpetra::Operator<>>> solver = factory.create("GMRES", solverOptions);
     
     auto problem = Teuchos::rcp(new Belos::LinearProblem<double, Tpetra::MultiVector<>, Tpetra::Operator<>>(A, X, B));
-    // problem->setRightPrec(M);
+    problem->setRightPrec(M);
     problem->setProblem();
     solver->setProblem(problem);
     Belos::ReturnType result = solver->solve();
