@@ -88,7 +88,7 @@ namespace ExodusIO {
             // The returned matrix is a Node x Node matrix, not one based on elements.
             // To obtain a matrix consisting purely of elements, see `getDual`.
             // TODO: Crashes when run sequentially...
-            bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret, bool verbose=false) {
+            bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret, std::map<int, std::set<idx_t>> &nodeSetMap, bool verbose=false) {
                 auto comm = Tpetra::getDefaultComm();
                 auto rank = Teuchos::rank(*comm);
                 auto ranks = Teuchos::size(*comm);
@@ -800,7 +800,6 @@ namespace ExodusIO {
                 // We must return the nodeset information for this mesh, as it is used for specifying boundary
                 // conditions. We create a mapping of each id to the set of nodes in that nodeset, but only if
                 // that node belongs to our local process.
-                std::map<int, std::set<idx_t>> nodeSetMap;
                 ids = new int[params.num_node_sets];
                 ex_get_ids(readFID, EX_NODE_SET, ids);
                 
@@ -824,20 +823,22 @@ namespace ExodusIO {
                 }
                 delete[] ids;
 
-                for (int i = 0; i < ranks; i++) {
-                    if (i == rank) {
-                        std::cout << "Process #" << rank << " has " << nodeSetMap.size() << " node sets" << std::endl;
-                        for (auto &idSet : nodeSetMap) {
-                            std::cout << "Nodeset #" << idSet.first << " (" << idSet.second.size() << "): {";
-                            int idx = 0;
-                            for (auto id : idSet.second) {
-                                if (idx++) std::cout << ",";
-                                std::cout << id;
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << " has " << nodeSetMap.size() << " node sets" << std::endl;
+                            for (auto &idSet : nodeSetMap) {
+                                std::cout << "Nodeset #" << idSet.first << " (" << idSet.second.size() << "): {";
+                                int idx = 0;
+                                for (auto id : idSet.second) {
+                                    if (idx++) std::cout << ",";
+                                    std::cout << id;
+                                }
+                                std::cout << "}" << std::endl;
                             }
-                            std::cout << "}" << std::endl;
                         }
+                        Teuchos::barrier(*comm);
                     }
-                    Teuchos::barrier(*comm);
                 }
 
 

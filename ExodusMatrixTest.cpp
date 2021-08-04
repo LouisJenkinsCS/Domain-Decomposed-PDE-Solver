@@ -154,7 +154,8 @@ int main(int argc, char *argv[]) {
         }
 
         Teuchos::RCP<Tpetra::CrsMatrix<>> ret;
-        if (!io.getMatrix(&ret, verbose)) {
+        std::map<int, std::set<idx_t>> nodeSetMap;
+        if (!io.getMatrix(&ret, nodeSetMap, verbose)) {
             std::cerr << "Process #" << rank <<  ": Failed to getMatrix!!" << std::endl;
             return EXIT_FAILURE;
         }
