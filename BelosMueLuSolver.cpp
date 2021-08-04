@@ -7,6 +7,14 @@
 
 /*
     MueLu crashes in Amesos' 'transpose' function, so we use IFPACK2 instead.
+
+    Developer Note: MueLu and IFPACK2 both provide what are known as 'preconditioners', which
+    essentially is a matrix applied to either side of the linear equation (in this case the right-hand side)
+    and has the effect that it will reduces the _condition number_ of the function (matrix) it is applied to.
+    The condition number is a measure of how much a change in the input results in a change in the output;
+    in a well-conditioned function, a slight change in the input will result in a slight change in the output;
+    in a poorly-conditioned function, a slight change in the input will result in a _substantial_ change in the output.
+    Hence the need to condition the matrix, since the goal is to reach convergence (i.e. think gradient descent).
 */
 
 void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, bool sparse=true) {
@@ -52,7 +60,7 @@ void printMultiVector(const Teuchos::RCP<const Tpetra::MultiVector<>> X) {
 
         for (int row = 0; row < vec->getGlobalLength(); row++) {
             if (vec->getMap()->isNodeGlobalElement(row)) {
-                std::cout << "\tProcess #" << rank << ": [";
+                std::cout << "\tProcess #" << rank << ": " << row << " => [";
                 std::cout << copy[vec->getMap()->getLocalElement(row)];
                 std::cout << "]" << std::endl;
                 std::flush(std::cout);
