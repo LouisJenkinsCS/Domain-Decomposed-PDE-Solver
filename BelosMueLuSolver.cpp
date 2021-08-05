@@ -23,7 +23,7 @@ void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, bool s
     auto rows = matrix->getGlobalNumRows();
     auto map = matrix->getRowMap();
 
-    for (int row = 0; row < rows; row++) {
+    for (int row = 1; row <= rows; row++) {
         if (map->isNodeGlobalElement(row)) {
             std::cout << "Process #" << rank << ": [";
             Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(matrix->getNumEntriesInGlobalRow(row));
@@ -58,7 +58,7 @@ void printMultiVector(const Teuchos::RCP<const Tpetra::MultiVector<>> X) {
         auto vec = X->getVector(col);
         auto copy = vec->get1dView();
 
-        for (int row = 0; row < vec->getGlobalLength(); row++) {
+        for (int row = 0; row <= vec->getGlobalLength(); row++) {
             if (vec->getMap()->isNodeGlobalElement(row)) {
                 std::cout << "\tProcess #" << rank << ": " << row << " => [";
                 std::cout << copy[vec->getMap()->getLocalElement(row)];
@@ -155,6 +155,7 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
+        if (rank == 0) std::cout << "Printing out CrsMatrix" << std::endl;
         auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
         ret->describe(*ostr, verbose ? Teuchos::EVerbosityLevel::VERB_EXTREME : Teuchos::EVerbosityLevel::VERB_MEDIUM);
         printCrsMatrix(ret);
