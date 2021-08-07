@@ -3,6 +3,7 @@
 #include <Tpetra_Vector.hpp>
 #include <Tpetra_CrsMatrix.hpp>
 #include <Teuchos_VerboseObject.hpp>
+#include <Zoltan2_Adapter.hpp>
 
 #include "exodusII.h"
 #include <string>
@@ -83,11 +84,284 @@ namespace ExodusIO {
                 return true;
             }
 
+            // Reads in the Exodus file specified in the 'open' function. The nodesets specified in the Exodus file is used to
+            // distinguish known from unknown nodes. The known nodes, which are nodes specified in the nodesets, only contribute to the
+            // overall degree of a given node, but the Laplacian will only be based on the degrees of freedom. I.E. if an unknown node n is
+            // adjacent to a known node m, then m will contribute to the overall degree of n, but will not count as being adjacent to n.
+            // The resulting Laplacian will be smaller than the original Laplacian (i.e. Laplacian including both known and unknown nodes),
+            // which will then be partitioned via ParMETIS. The multivector X will be randomizd but will be the same size as the number of
+            // degrees of freedom, and the multivector B wiil consist of the sum of known nodes that the unknown is adjacent to.
+            // The CrsMatrix A has the following properties: 
+            //      A[i,j] = -1 if i and j are adjacent (i and j are unknowns)
+            //      A[i,i] = Degree(i) (Degree(i) = adjacent known and unknown)
+            // Note: sidesets are unused; if you want to make use of sidesets, i.e. marking elements rather than nodes as unknown,
+            // see 'getMatrix' function.
+            bool assemble(Teuchos::RCP<Tpetra::CrsMatrix<>> *A, Teuchos::RCP<Tpetra::MultiVector<>> *X, Teuchos::RCP<Tpetra::MultiVector<>> *B, bool verbose=false) {
+                typedef Tpetra::Details::DefaultTypes::global_ordinal_type global_t;
+                typedef Tpetra::Details::DefaultTypes::local_ordinal_type local_t;
+                
+                auto comm = Tpetra::getDefaultComm();
+                auto rank = Teuchos::rank(*comm);
+                auto ranks = Teuchos::size(*comm);
+                if (readFID == -1) return false;
+
+                /////////////////////////////////////////////////////////////////////
+                // 1. Read in Mesh from Exodus File
+                /////////////////////////////////////////////////////////////////////
+
+                // Gather all data we need to pass to ParMETIS - Each MPI Process is doing this...
+                ex_init_params params;
+                if (ex_get_init_ext(readFID,&params)) {
+                    return false;
+                }
+                if (rank == 0 && verbose) {
+                    std::cout << "Title: " << params.title << "\n# of Dimensions: " << params.num_dim  << "\n# of Blobs: " << params.num_blob << "\n# of Assembly: " << params.num_assembly
+                        << "\n# of Nodes: " << params.num_nodes << "\n# of Elements: " << params.num_elem << "\n# of Faces: " << params.num_face
+                        << "\n# of Element Blocks: " << params.num_elem_blk << "\n# of Face Blocks: " << params.num_face_blk << "\n# of Node Sets: " << params.num_node_sets 
+                        << "\n# of Side Sets: " << params.num_side_sets << "\n# of Face Sets: " << params.num_face_sets << "\n# of Node Maps: " << params.num_node_maps
+                        << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps: " << params.num_face_maps 
+                        << "\n# of Bytes in idx_t: " << sizeof(idx_t) << "\n# of Bytes in real_t: " << sizeof(real_t) << std::endl;
+                }
+
+                // Obtain nodeset information from Exodus file
+                // Constraint: Exodus requires reading in the entire nodeset into memory
+                // at once... this means that we can end up with an Out-of-Memory problem,
+                // so each process only keeps track of local nodeset information. 
+                auto initialMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, 0, comm));
+                std::map<int, std::set<idx_t>> nodeSetMap;
+                int *ids = new int[params.num_node_sets];
+                ex_get_ids(readFID, EX_NODE_SET, ids);
+                
+                for (idx_t i = 0; i < params.num_node_sets; i++) {
+                    idx_t num_nodes_in_set = -1, num_df_in_set = -1;
+                    assert(!ex_get_set_param(readFID, EX_NODE_SET, ids[i], &num_nodes_in_set, &num_df_in_set));
+                                    
+                    idx_t *node_list = new idx_t[num_nodes_in_set];
+                    real_t *dist_fact = new real_t[num_nodes_in_set];
+
+                
+                    assert(!ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL));
+                    
+                    for (int j = 0; j < num_nodes_in_set; j++) {
+                        if (initialMap->isNodeGlobalElement(node_list[j])) {
+                            nodeSetMap[ids[i]].insert(node_list[j]);
+                        }
+                    }
+                    delete[] node_list;
+                    delete[] dist_fact;
+                }
+                delete[] ids;
+
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << " has " << nodeSetMap.size() << " node sets" << std::endl;
+                            for (auto &idSet : nodeSetMap) {
+                                std::cout << "Nodeset #" << idSet.first << " (" << idSet.second.size() << "): {";
+                                int idx = 0;
+                                for (auto id : idSet.second) {
+                                    if (idx++) std::cout << ",";
+                                    std::cout << id;
+                                }
+                                std::cout << "}" << std::endl;
+                            }
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                /////////////////////////////////////////////////////////////////////
+                // 2. Relabel nodes that are eliminated and create Laplacian
+                /////////////////////////////////////////////////////////////////////
+                
+                // First eliminate local indices 
+                std::map<local_t, local_t> relabelLocalIndexForward; // initialMap -> reducedMap
+                std::map<local_t, local_t> relabelLocalIndexBackward; // reducedMap -> initialMap
+                local_t newIdx = 0;
+                for (local_t i = initialMap->getMinLocalIndex(); i < initialMap->getMaxLocalIndex(); i++) {
+                    global_t gid = initialMap->getGlobalElement(i)+1;
+                    // Check if gid is in any of the nodeset maps
+                    bool found = false;
+                    for (auto &idSet : nodeSetMap) {
+                        if (idSet.second.count(gid)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        relabelLocalIndexForward[i] = newIdx;
+                        relabelLocalIndexBackward[newIdx] = i;
+                        newIdx++;
+                    }
+                }
+                auto reducedMap = Teuchos::rcp(new Tpetra::Map<>(Teuchos::OrdinalTraits<Tpetra::global_size_t>::invalid(), newIdx, 0, Tpetra::getDefaultComm()));
+
+                // We need to create the Laplacian with only adjacency of the degree-of-freedoms, but also have the
+                // degree of both degree-of-freedom and non-degree-of-freedom neighbors. The current process obtains
+                // the adjacency of each node that it owns by scanning through each element block and adding nodes in each
+                // element to the set for each node representing adjacency. 
+
+                ids = new int[params.num_elem_blk];
+                for (int i = 0; i < params.num_elem_blk; i++) ids[i] = 0;
+                idx_t num_elem_in_block = 0;
+                idx_t num_nodes_per_elem = 0;
+                idx_t num_edges_per_elem = 0;
+                idx_t num_faces_per_elem = 0;
+                idx_t num_attr = 0;
+                char elemtype[MAX_STR_LENGTH+1];
+
+                if (ex_get_ids(readFID, EX_ELEM_BLOCK, ids)) {
+                    std::cerr << "Rank #" << Teuchos::rank(*comm) << ": " << "Failed to call `ex_get_ids`" << std::endl;
+                    return false;
+                }
+                if (verbose) {
+                    for (int i = 0; i < params.num_elem_blk; i++) {
+                        std::cout << "Rank #" << Teuchos::rank(*comm) << ": " << "Element Block Id: " << (int) ids[i] << std::endl;
+                    }
+                }
+                std::map<idx_t, std::set<idx_t>> adjacency;
+                // using the element block parameters read the element block info
+                for (idx_t i=0; i<params.num_elem_blk; i++) {
+                    if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype, &num_elem_in_block, &num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) {
+                        std::cerr << "Rank #" << rank << ": " << "Failed to `ex_get_block` element block " << i+1 << " of " << params.num_elem_blk << " with id " << ids[i] << std::endl;
+                        return false;
+                    }
+                    if (rank == 0 && verbose) {
+                        std::cout << "Block #" << i << " has the following..."
+                            << "\n\t# of Elements: " << num_elem_in_block
+                            << "\n\t# of Nodes per Element: " << num_nodes_per_elem
+                            << "\n\t# of Edges per Element: " << num_edges_per_elem
+                            << "\n\t# of Faces per Element: " << num_faces_per_elem
+                            << "\n\t# of Attributes: " << num_attr
+                            << "\n\tElement Type: " << elemtype << std::endl;
+                    }
+
+                    idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
+                    for (int i = 0; i < num_elem_in_block * num_nodes_per_elem; i++) connect[i] = 0;
+                    ex_get_elem_conn(readFID, ids[i], connect);
+                    for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j += num_nodes_per_elem) {
+                        for (idx_t k = j; k < j + num_nodes_per_elem; k++) {
+                            if (initialMap->isNodeGlobalElement(connect[k])) {
+                                // Check if it belongs to a nodeset (i.e. is a non-DOF node)
+                                // Note, we can just check if relabelMap is -1 for the local index since
+                                // we have already computed whether or not a node is a DOF or not.
+                                local_t node = initialMap->getLocalElement(connect[k]);
+                                if (relabelLocalIndexForward.count(node)) {
+                                    // Add each node in the element to adjacency of this node
+                                    for (idx_t l = j; l < j + num_nodes_per_elem; l++) {
+                                        if (l == k) continue;
+                                        // Note that we may insert non-DOF nodes, which is fine since we need to get the degree anyway
+                                        adjacency[reducedMap->getGlobalElement(node)].insert(connect[l]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    delete[] connect;
+                }
+
+                if (verbose) {
+                    Teuchos::barrier(*comm);
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << std::endl;
+                            std::cout << "Forward Mappings: {" << std::endl;
+                            for (auto fwd : relabelLocalIndexForward) {
+                                std::cout << "\t" << fwd.first + 1 << "(" << initialMap->getGlobalElement(fwd.first) + 1 << ") -> " << fwd.second + 1 << "(" << reducedMap->getGlobalElement(fwd.second) + 1 << ")" << std::endl;
+                            }
+                            std::cout << "}" << std::endl;
+                            std::cout << "Backward Mappings: {" << std::endl;
+                            for (auto bwd : relabelLocalIndexBackward) {
+                                std::cout << "\t" << bwd.first + 1 << "(" << reducedMap->getGlobalElement(bwd.first) + 1 << ") -> " << bwd.second + 1 << "(" << initialMap->getGlobalElement(bwd.second) + 1 << ")" << std::endl;
+                            }
+                            std::cout << "}" << std::endl;
+                            std::cout << "Adjacency: {" << std::endl;
+                            for (auto &idSet : adjacency) {
+                                std::cout << "\t" << initialMap->getGlobalElement(relabelLocalIndexBackward[reducedMap->getLocalElement(idSet.first)]) + 1 << " => [";
+                                bool needComma = false;
+                                for (auto node : idSet.second) {
+                                    if (relabelLocalIndexForward.count(initialMap->getLocalElement(node)) == 0) continue;
+                                    if (needComma) std::cout << ",";
+                                    std::cout << node;
+                                    needComma = true;
+                                }
+                                std::cout << "]" << std::endl;
+                            }
+                            std::cout << "}" << std::endl;
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                // Compute global column size
+                size_t maxColPerRow = 0;
+                for (auto &idSet : adjacency) {
+                    maxColPerRow = std::max(maxColPerRow, idSet.second.size());
+                }
+                auto laplacian = Teuchos::rcp(new Tpetra::CrsMatrix<>(reducedMap, maxColPerRow));
+                
+
+                /////////////////////////////////////////////////////////////////////
+                // 3. Fill out the Laplacian from Adjacency information
+                /////////////////////////////////////////////////////////////////////
+
+                // Add all elements to the matrix and force communication
+                for (auto &idxRow : adjacency) {
+                    idx_t id = idxRow.first;
+                    auto &row = idxRow.second;
+                    Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(row.size() + 1);
+                    Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(row.size() + 1);
+                    int idx = 0;
+                    for (auto cell : row) {
+                        local_t nodeInInitial = initialMap->getLocalElement(cell);
+                        // Only do so if it a DOF node (check relabel mapping)
+                        if (relabelLocalIndexForward.count(nodeInInitial)) {
+                            cols[idx] = reducedMap->getGlobalElement(relabelLocalIndexForward[nodeInInitial]);
+                            vals[idx++] = -1;
+                        }
+                    }
+                    cols.resize(idx+1);
+                    vals.resize(idx+1);
+                    cols[idx] = id;
+                    vals[idx] = row.size();
+                    laplacian->insertGlobalValues(id, cols, vals);
+                }
+                laplacian->fillComplete(reducedMap, reducedMap);
+
+                laplacian->resumeFill();
+                auto indices = reducedMap->getMyGlobalIndices();
+                for (int i = 0; i < indices.size(); i++) {
+                    global_t row = indices[i];
+                    Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(laplacian->getNumEntriesInGlobalRow(row));
+                    Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(laplacian->getNumEntriesInGlobalRow(row));
+                    size_t sz;
+                    laplacian->getGlobalRowCopy(row, cols, vals, sz);
+                    for (int i = 0; i < cols.size(); i++) {
+                        if (vals[i] > 0) {
+                            vals[i] = vals.size() - 1;
+                        } else {
+                            vals[i] = -1;
+                        }
+                    }
+                    laplacian->replaceGlobalValues(row, cols, vals);
+                }
+                laplacian->fillComplete(reducedMap, reducedMap);
+                
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    laplacian->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                    Teuchos::barrier(*comm);
+                }
+            }
+
             // Reads in the Exodus file specified in the 'open' function, partitions it 
             // according to ParMETIS, and then returns the Compressed Sparse Row Matrix.
             // The returned matrix is a Node x Node matrix, not one based on elements.
-            // To obtain a matrix consisting purely of elements, see `getDual`.
-            // TODO: Crashes when run sequentially...
+            // Note: The returned matrix is partitioned based on _elements_, and not based
+            // on nodes. Right now it gives the Laplacian of the entire mesh, which is singular
+            // and therefore not fit for a solver... but, if a particular PDE was meant to be
+            // make use of the sidesets (which mark elements, not nodes, as unknown), then perhaps
+            // this code could be useful.
             bool getMatrix(Teuchos::RCP<Tpetra::CrsMatrix<>> *ret, std::map<int, std::set<idx_t>> &nodeSetMap, bool verbose=false) {
                 auto comm = Tpetra::getDefaultComm();
                 auto rank = Teuchos::rank(*comm);
@@ -770,7 +1044,6 @@ namespace ExodusIO {
                     matrix->insertGlobalValues(id, cols, vals);
                 }
                 matrix->fillComplete(map, map);
-
 
                 matrix->resumeFill();
                 for (auto row : nodeIndices) {
