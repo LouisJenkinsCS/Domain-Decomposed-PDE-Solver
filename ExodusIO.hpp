@@ -4,7 +4,8 @@
 #include <Tpetra_CrsMatrix.hpp>
 #include <Teuchos_VerboseObject.hpp>
 #include <Zoltan2_Adapter.hpp>
-
+#include <Zoltan2_XpetraCrsMatrixAdapter.hpp>
+#include <Zoltan2_PartitioningProblem.hpp>
 #include "exodusII.h"
 #include <string>
 #include <iostream>
@@ -553,27 +554,15 @@ namespace ExodusIO {
                         // Only do so if it a DOF node (check relabel mapping)
                         cols[idx] = globalIdx;
                         vals[idx++] = -1;
-                        std::cout << "Process #" << rank << " pushed " << "(" << cols[idx-1] << "," << vals[idx-1] << ")" << std::endl;
                     }
                     cols.resize(idx+1);
                     vals.resize(idx+1);
                     cols[idx] = id;
                     vals[idx] = adjacency[id].size();
                     laplacian->insertGlobalValues(id, cols, vals);
-                    std::cout << "Rank #" << rank << ": Inserted {";
-                    for (int i = 0; i < idx+1; i++) {
-                        if (i) std::cout << ",";
-                        std::cout << "(" << cols[i] << "," << vals[i] << ")";
-                    }
-                    std::cout << "} for element " << id << std::endl;
                 }
                 laplacian->fillComplete(reducedMap, reducedMap);
 
-                if (verbose) {
-                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
-                    laplacian->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
-                    Teuchos::barrier(*comm);
-                }
 
                 if (verbose) {
                     auto matrix = laplacian;
@@ -582,9 +571,9 @@ namespace ExodusIO {
                     auto rows = matrix->getGlobalNumRows();
                     auto map = matrix->getRowMap();
 
-                    for (int row = 1; row <= rows; row++) {
+                    for (int row = 0; row <= rows; row++) {
                         if (map->isNodeGlobalElement(row)) {
-                            std::cout << "Process #" << rank << ": [";
+                            std::cout << "Process #" << rank << ": " << node_map[backwardGlobalToGlobal(row)] << " => [";
                             Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(matrix->getNumEntriesInGlobalRow(row));
                             Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(matrix->getNumEntriesInGlobalRow(row));
                             size_t sz;
@@ -601,6 +590,30 @@ namespace ExodusIO {
                         }
                         Teuchos::barrier(*Tpetra::getDefaultComm());
                     }
+                }
+
+                /////////////////////////////////////////////////////////////////////
+                // 4. Partition the nodal matrix via Zoltan2 and friends (i.e. export)
+                /////////////////////////////////////////////////////////////////////
+
+                Teuchos::ParameterList param;
+                param.set("partitioning_approach", "partition");
+                param.set("algorithm", "parmetis");
+                Zoltan2::XpetraCrsMatrixAdapter<Tpetra::CrsMatrix<>> adapter(laplacian);
+                Zoltan2::PartitioningProblem<Zoltan2::XpetraCrsMatrixAdapter<Tpetra::CrsMatrix<>>> problem(&adapter, &param);
+                try {
+                    problem.solve();
+                }
+                catch (std::exception &e) {
+                    std::cerr << "Exception returned from solve(). " << e.what() << std::endl;
+                    return false;
+                }
+                adapter.applyPartitioningSolution(*laplacian.getConst(), *A, problem.getSolution());
+
+                if (verbose) {
+                    auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
+                    laplacian->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
+                    Teuchos::barrier(*comm);
                 }
             }
 
