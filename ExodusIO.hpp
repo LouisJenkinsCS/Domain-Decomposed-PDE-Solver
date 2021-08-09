@@ -6,6 +6,7 @@
 #include <Zoltan2_Adapter.hpp>
 #include <Zoltan2_XpetraCrsMatrixAdapter.hpp>
 #include <Zoltan2_PartitioningProblem.hpp>
+#include <Zoltan2_XpetraMultiVectorAdapter.hpp>
 #include "exodusII.h"
 #include <string>
 #include <iostream>
@@ -619,8 +620,33 @@ namespace ExodusIO {
                 *X = Teuchos::rcp(new Tpetra::MultiVector<>((*A)->getDomainMap(),1));
                 srand(time(NULL));
                 (*X)->randomize();
-                *B = Teuchos::rcp(new Tpetra::MultiVector<>((*A)->getRangeMap(),1));
-                (*B)->putScalar(1.0);
+                auto _B = Teuchos::rcp(new Tpetra::MultiVector<>(laplacian->getRangeMap(),1));
+
+                // For the original distribution, we can scan through the original set of Adjacency to include the
+                // non-DOF adjacent nodes, and then sum their values.
+                for (auto &idxRow : adjacency) {
+                    idx_t id = idxRow.first;
+                    auto &row = idxRow.second;
+                    int sum = 0;
+                    for (auto cell : row) {
+                        for (auto &idSet : nodeSetMap) {
+                            if (idSet.second.count(cell)) {
+                                sum += idSet.first;
+                                break;
+                            }
+                        }
+                    }
+                    global_t boundaryConditionIdx = backwardGlobalToGlobal(id);
+                    assert(boundaryConditionIdx != invalid);
+                    auto data = _B->get1dViewNonConst();
+                    data[_B->getMap()->getLocalElement(id)] = sum;
+                    std::cout << "Process #" << rank << " has set " << id << "(" << boundaryConditionIdx << ") to " << sum << std::endl;
+                }
+
+               
+                
+                Zoltan2::XpetraMultiVectorAdapter<Tpetra::MultiVector<>> vectorAdapter(_B);
+                vectorAdapter.applyPartitioningSolution(*_B, *B, problem.getSolution());
                 return true;
             }
 

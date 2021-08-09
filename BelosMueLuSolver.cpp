@@ -166,7 +166,6 @@ int main(int argc, char *argv[]) {
         // The linear equation being solved for is 'AX = B', where A is the laplacian matrix,
         // X is the solution (with initial randomized guess), and B is the desired values to converge to.
         if (rank == 0)  std::cout << "Printing out multivector B" << std::endl;
-        B->randomize();
         printMultiVector(B);
 
         srand(time(NULL));
