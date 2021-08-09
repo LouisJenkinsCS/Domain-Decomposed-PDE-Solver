@@ -148,46 +148,32 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
-        Teuchos::RCP<Tpetra::CrsMatrix<>> ret;
+        Teuchos::RCP<Tpetra::CrsMatrix<>> A;
+        Teuchos::RCP<Tpetra::MultiVector<>> X;
+        Teuchos::RCP<Tpetra::MultiVector<>> B;
         std::map<int, std::set<idx_t>> nodeSetMap;
-        if (!io.getMatrix(&ret, nodeSetMap, verbose)) {
+        if (!io.assemble(&A, &X, &B, verbose)) {
             std::cerr << "Process #" << rank <<  ": Failed to getMatrix!!" << std::endl;
             return EXIT_FAILURE;
         }
 
         if (rank == 0) std::cout << "Printing out CrsMatrix" << std::endl;
         auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
-        ret->describe(*ostr, verbose ? Teuchos::EVerbosityLevel::VERB_EXTREME : Teuchos::EVerbosityLevel::VERB_MEDIUM);
-        printCrsMatrix(ret);
+        A->describe(*ostr, verbose ? Teuchos::EVerbosityLevel::VERB_EXTREME : Teuchos::EVerbosityLevel::VERB_MEDIUM);
+        printCrsMatrix(A);
 
         // Invoke solver...
         // The linear equation being solved for is 'AX = B', where A is the laplacian matrix,
         // X is the solution (with initial randomized guess), and B is the desired values to converge to.
-        Teuchos::RCP<Tpetra::MultiVector<>> X = Teuchos::rcp(new Tpetra::MultiVector<>(ret->getDomainMap(),1));
-        Teuchos::RCP<Tpetra::MultiVector<>> B = Teuchos::rcp(new Tpetra::MultiVector<>(ret->getRangeMap(),1));
-        B->putScalar(0);
-        
-        // Setup B from nodeSetMap
-        {
-            auto data = B->get1dViewNonConst();
-            auto map = B->getMap();
-            for (auto &it : nodeSetMap) {
-                auto nid = it.first;
-                auto &set = it.second;
-                for (auto idx : set) {
-                    data[map->getLocalElement(idx)] = (double) nid;
-                }
-            }
-        }
-
         if (rank == 0)  std::cout << "Printing out multivector B" << std::endl;
+        B->randomize();
         printMultiVector(B);
 
         srand(time(NULL));
         X->randomize();
         if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
         printMultiVector(X);
-        belosSolver(ret, X, B, numIterations, tolerance);
+        belosSolver(A, X, B, numIterations, tolerance);
     }
 
     return 0;

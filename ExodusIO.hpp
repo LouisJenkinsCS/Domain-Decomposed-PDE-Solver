@@ -615,6 +615,13 @@ namespace ExodusIO {
                     laplacian->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                     Teuchos::barrier(*comm);
                 }
+
+                *X = Teuchos::rcp(new Tpetra::MultiVector<>((*A)->getDomainMap(),1));
+                srand(time(NULL));
+                (*X)->randomize();
+                *B = Teuchos::rcp(new Tpetra::MultiVector<>((*A)->getRangeMap(),1));
+                (*B)->putScalar(1.0);
+                return true;
             }
 
             // Reads in the Exodus file specified in the 'open' function, partitions it 
