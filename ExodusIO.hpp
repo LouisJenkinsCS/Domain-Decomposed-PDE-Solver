@@ -156,9 +156,7 @@ namespace ExodusIO {
                     assert(!ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL));
                     
                     for (int j = 0; j < num_nodes_in_set; j++) {
-                        if (initialMap->isNodeGlobalElement(node_list[j]-1)) {
-                            nodeSetMap[ids[i]].insert(node_list[j]-1);
-                        }
+                        nodeSetMap[ids[i]].insert(node_list[j]-1);
                     }
                     delete[] node_list;
                     delete[] dist_fact;
@@ -279,6 +277,14 @@ namespace ExodusIO {
                     if (localIdx == invalid) return invalid;
                     return initialMap->getGlobalElement(localIdx);
                 };
+                auto isDOF = [&](global_t globalIdx) -> bool {
+                    for (auto &idSet : nodeSetMap) {
+                        if (idSet.second.count(globalIdx)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
 
                 // We need to create the Laplacian with only adjacency of the degree-of-freedoms, but also have the
                 // degree of both degree-of-freedom and non-degree-of-freedom neighbors. The current process obtains
@@ -343,6 +349,14 @@ namespace ExodusIO {
                     delete[] connect;
                 }
 
+                std::map<idx_t, std::set<idx_t>> newAdjacency;
+                for (auto &idSet : adjacency) {
+                    for (global_t node : idSet.second) {
+                        if (!isDOF(node-1)) continue;
+                        newAdjacency[idSet.first].insert(node);
+                    }
+                }
+
                 if (verbose) {
                     Teuchos::barrier(*comm);
                     for (int i = 0; i < ranks; i++) {
@@ -356,14 +370,12 @@ namespace ExodusIO {
                             }
                             std::cout << "}" << std::endl;
                             std::cout << "Adjacency: {" << std::endl;
-                            for (auto &idSet : adjacency) {
+                            for (auto &idSet : newAdjacency) {
                                 std::cout << "\t" << node_map[backwardGlobalToGlobal(idSet.first)] << " => [";
                                 bool needComma = false;
-                                for (auto node : idSet.second) {
-                                    global_t newIdx = forwardGlobalToGlobal(node-1);
-                                    if (newIdx == invalid) continue;
+                                for (global_t node : idSet.second) {
                                     if (needComma) std::cout << ",";
-                                    std::cout << node_map[initialMap->getGlobalElement(node-1)];
+                                    std::cout << node_map[node-1];
                                     needComma = true;
                                 }
                                 std::cout << "]" << std::endl;
@@ -376,8 +388,8 @@ namespace ExodusIO {
 
                 // Compute global column size
                 size_t maxColPerRow = 0;
-                for (auto &idSet : adjacency) {
-                    maxColPerRow = std::max(maxColPerRow, idSet.second.size());
+                for (auto &idSet : newAdjacency) {
+                    maxColPerRow = std::max(maxColPerRow, idSet.second.size() + 1);
                 }
                 auto laplacian = Teuchos::rcp(new Tpetra::CrsMatrix<>(reducedMap, maxColPerRow));
                 
@@ -386,52 +398,209 @@ namespace ExodusIO {
                 // 3. Fill out the Laplacian from Adjacency information
                 /////////////////////////////////////////////////////////////////////
 
+                // All processes must communicate with each other to share this new mapping from initialMapping -> reducedMapping
+                // Build local global-to-global indices to be shared across all processes
+                // Each process has an array of indices that acts as a dense mapping from initialMap to reduceMap.
+                // The `getRemoteIndexList` gives you information such as the node IDs (process ids) and local indices, which correspond
+                // to the aforementioned dense mapping. By pooling together the set of neighboring indices specified in `newAdjacency`, 
+                // and obtaining their global indices (obtained by indexing directly into the remote process' dense mappings), we can
+                // cut down the amount of space stored on each node. We use an MPI Window allowing other processes to directly GET the
+                // information without the extra tedium and difficulty involved with two-sided communication.
+                MPI_Win mappingWindow;
+                global_t *globalIndices;
+                MPI_Win_allocate(sizeof(global_t) * initialMap->getNodeNumElements(), sizeof(global_t), MPI_INFO_NULL, MPI_COMM_WORLD, &globalIndices, &mappingWindow);
+                for (local_t i = initialMap->getMinLocalIndex(); i < initialMap->getMaxLocalIndex(); i++) {
+                    // Gather initialMap -> reducedMap mappings
+                    globalIndices[i] = forwardLocalToGlobal(i);
+                    assert(globalIndices[i] != invalid || !isDOF(initialMap->getGlobalElement(i)));
+                }
+
+                // Our sparse mappings of initialMap -> reducedMap based on newAdjacency; should include local mappings too
+                std::map<global_t, global_t> sparseMapping; // global initialMap -> global reducedMap
+                std::set<global_t> neighborsToQuery;
+                for (auto &idSet : newAdjacency) {
+                    global_t id = idSet.first;
+                    sparseMapping[backwardGlobalToGlobal(id)] = id;
+                    assert(sparseMapping[backwardGlobalToGlobal(id)] != invalid);
+                    for (global_t node : idSet.second) {
+                        if (initialMap->isNodeGlobalElement(node-1)) continue;
+                        neighborsToQuery.insert(node-1);
+                    }
+                }
+
+                Teuchos::Array<global_t> GIDList(neighborsToQuery.size());
+                {
+                    int i = 0;
+                    for (auto &id : neighborsToQuery) {
+                        GIDList[i++] = id;
+                    }
+                }
+                Teuchos::Array<int> nodeIDs(GIDList.size());
+                Teuchos::Array<local_t> LIDList(GIDList.size());
+                assert(initialMap->getRemoteIndexList(GIDList, nodeIDs, LIDList) == Tpetra::LookupStatus::AllIDsPresent);
+                
+                // Optimization: Sort based on NodeIDs so that we can, in bulk, retrieve elements by locking the MPI Window only once.
+                std::vector<std::tuple<int, global_t, local_t>> sortedTriple; // (rank, globalIdx, localIdx)
+                for (int i = 0; i < nodeIDs.size(); i++) {
+                    sortedTriple.push_back(std::make_tuple(nodeIDs[i], GIDList[i], LIDList[i]));
+                }
+                std::sort(sortedTriple.begin(), sortedTriple.end(), [](const std::tuple<int, global_t, local_t> &a, const std::tuple<int, global_t, local_t> &b) {
+                    return std::get<0>(a) < std::get<0>(b);
+                });
+
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << " has " << sortedTriple.size() << " neighbors to query" << std::endl;
+                            for (auto &t : sortedTriple) {
+                                std::cout << "\t" << std::get<0>(t) << ": " << std::get<1>(t) << " -> " << std::get<2>(t) << std::endl;
+                            }
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                // Access remote global mappings with optimization that we only need to unlock once we find a new nodeID
+                std::vector<global_t> perProcessMapping[ranks];
+                int perProcessMappingSize = 0;
+                bool isFirstNode = true;
+                int currNodeID = -1;
+                for (auto &t : sortedTriple) {
+                    int nodeID = std::get<0>(t);
+                    global_t globalIdx = std::get<1>(t);
+                    local_t localIdx = std::get<2>(t);
+                    if (isFirstNode) {
+                        isFirstNode = false;
+                        currNodeID = nodeID;
+                    }
+                    
+                    if (currNodeID != nodeID) {
+                        perProcessMapping[currNodeID].resize(perProcessMappingSize+1);
+                        currNodeID = nodeID;
+                        perProcessMappingSize = 0;
+                    }
+
+                    perProcessMappingSize++;
+                }
+                perProcessMapping[currNodeID].resize(perProcessMappingSize+1);
+                
+                isFirstNode = true;
+                currNodeID = -1;
+                perProcessMappingSize = 0;
+                for (auto &t : sortedTriple) {
+                    int nodeID = std::get<0>(t);
+                    global_t globalIdx = std::get<1>(t);
+                    local_t localIdx = std::get<2>(t);
+                    if (isFirstNode) {
+                        isFirstNode = false;
+                        MPI_Win_lock(MPI_LOCK_SHARED, nodeID, 0, mappingWindow);
+                        currNodeID = nodeID;
+                    }
+
+                    if (currNodeID != nodeID) {
+                        MPI_Win_unlock(currNodeID, mappingWindow);
+                        currNodeID = nodeID;
+                        perProcessMappingSize = 0;
+                        MPI_Win_lock(MPI_LOCK_SHARED, nodeID, 0, mappingWindow);
+                    }
+
+                    perProcessMapping[nodeID][perProcessMappingSize] = invalid;
+                    MPI_Get(&perProcessMapping[nodeID][perProcessMappingSize++], 1, sizeof(global_t) == 8 ? MPI_LONG : MPI_INT, nodeID, localIdx, 1, sizeof(global_t) == 8 ? MPI_LONG : MPI_INT, mappingWindow);
+                }
+                MPI_Win_unlock(currNodeID, mappingWindow);
+                
+                isFirstNode = true;
+                currNodeID = -1;
+                perProcessMappingSize = 0;
+                for (auto &t : sortedTriple) {
+                    int nodeID = std::get<0>(t);
+                    global_t globalIdx = std::get<1>(t);
+                    local_t localIdx = std::get<2>(t);
+                    if (isFirstNode) {
+                        isFirstNode = false;
+                        currNodeID = nodeID;
+                    }
+                    
+                    if (currNodeID != nodeID) {
+                        currNodeID = nodeID;
+                        perProcessMappingSize = 0;
+                    }
+
+                    sparseMapping[globalIdx] = perProcessMapping[nodeID][perProcessMappingSize++];
+                }
+
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << " obtained " << sparseMapping.size() << " sparse mappings!" << std::endl;
+                            for (auto mappings : sparseMapping) {
+                                std::cout << "  " << node_map[mappings.first] << " -> " << mappings.second << std::endl;
+                            }
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
                 // Add all elements to the matrix and force communication
-                for (auto &idxRow : adjacency) {
+                for (auto &idxRow : newAdjacency) {
                     idx_t id = idxRow.first;
                     auto &row = idxRow.second;
                     Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(row.size() + 1);
                     Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(row.size() + 1);
                     int idx = 0;
                     for (auto cell : row) {
-                        local_t nodeInInitial = initialMap->getLocalElement(cell);
+                        global_t globalIdx = sparseMapping[cell-1];
                         // Only do so if it a DOF node (check relabel mapping)
-                        if (relabelLocalIndexForward.count(nodeInInitial)) {
-                            cols[idx] = reducedMap->getGlobalElement(relabelLocalIndexForward[nodeInInitial]);
-                            vals[idx++] = -1;
-                        }
+                        cols[idx] = globalIdx;
+                        vals[idx++] = -1;
+                        std::cout << "Process #" << rank << " pushed " << "(" << cols[idx-1] << "," << vals[idx-1] << ")" << std::endl;
                     }
                     cols.resize(idx+1);
                     vals.resize(idx+1);
                     cols[idx] = id;
-                    vals[idx] = row.size();
+                    vals[idx] = adjacency[id].size();
                     laplacian->insertGlobalValues(id, cols, vals);
+                    std::cout << "Rank #" << rank << ": Inserted {";
+                    for (int i = 0; i < idx+1; i++) {
+                        if (i) std::cout << ",";
+                        std::cout << "(" << cols[i] << "," << vals[i] << ")";
+                    }
+                    std::cout << "} for element " << id << std::endl;
                 }
                 laplacian->fillComplete(reducedMap, reducedMap);
 
-                laplacian->resumeFill();
-                auto indices = reducedMap->getMyGlobalIndices();
-                for (int i = 0; i < indices.size(); i++) {
-                    global_t row = indices[i];
-                    Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(laplacian->getNumEntriesInGlobalRow(row));
-                    Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(laplacian->getNumEntriesInGlobalRow(row));
-                    size_t sz;
-                    laplacian->getGlobalRowCopy(row, cols, vals, sz);
-                    for (int i = 0; i < cols.size(); i++) {
-                        if (vals[i] > 0) {
-                            vals[i] = vals.size() - 1;
-                        } else {
-                            vals[i] = -1;
-                        }
-                    }
-                    laplacian->replaceGlobalValues(row, cols, vals);
-                }
-                laplacian->fillComplete(reducedMap, reducedMap);
-                
                 if (verbose) {
                     auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
                     laplacian->describe(*ostr, Teuchos::EVerbosityLevel::VERB_EXTREME);
                     Teuchos::barrier(*comm);
+                }
+
+                if (verbose) {
+                    auto matrix = laplacian;
+                    auto rank = Tpetra::getDefaultComm()->getRank();
+                    auto ranks = Tpetra::getDefaultComm()->getSize();
+                    auto rows = matrix->getGlobalNumRows();
+                    auto map = matrix->getRowMap();
+
+                    for (int row = 1; row <= rows; row++) {
+                        if (map->isNodeGlobalElement(row)) {
+                            std::cout << "Process #" << rank << ": [";
+                            Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(matrix->getNumEntriesInGlobalRow(row));
+                            Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(matrix->getNumEntriesInGlobalRow(row));
+                            size_t sz;
+                            matrix->getGlobalRowCopy(row, cols, vals, sz);
+                            std::vector<std::pair<Tpetra::CrsMatrix<>::global_ordinal_type, Tpetra::CrsMatrix<>::scalar_type>> entries;
+                            for (size_t i = 0; i < cols.size(); i++) entries.push_back(std::make_pair(cols[i], vals[i]));
+                            std::sort(entries.begin(), entries.end());
+                            for (int i = 0; i < cols.size(); i++) {
+                                if (i) std::cout << ",";
+                                std::cout << "(" << entries[i].first << "," << entries[i].second << ")";
+                            }
+                            std::cout << "]" << std::endl;
+                            std::flush(std::cout);
+                        }
+                        Teuchos::barrier(*Tpetra::getDefaultComm());
+                    }
                 }
             }
 
