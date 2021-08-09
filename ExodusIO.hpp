@@ -103,6 +103,7 @@ namespace ExodusIO {
                 auto comm = Tpetra::getDefaultComm();
                 auto rank = Teuchos::rank(*comm);
                 auto ranks = Teuchos::size(*comm);
+                auto invalid = Teuchos::OrdinalTraits<Tpetra::global_size_t>::invalid();
                 if (readFID == -1) return false;
 
                 /////////////////////////////////////////////////////////////////////
@@ -121,6 +122,18 @@ namespace ExodusIO {
                         << "\n# of Side Sets: " << params.num_side_sets << "\n# of Face Sets: " << params.num_face_sets << "\n# of Node Maps: " << params.num_node_maps
                         << "\n# of Element Maps: " << params.num_elem_maps << "\n# of Face Maps: " << params.num_face_maps 
                         << "\n# of Bytes in idx_t: " << sizeof(idx_t) << "\n# of Bytes in real_t: " << sizeof(real_t) << std::endl;
+                }
+
+                // WARNING: Nodemap reads everything on a single node!
+                int *node_map = new int[params.num_nodes];
+                ex_get_node_num_map(readFID, node_map);
+
+                if (verbose && rank == 0) {
+                    std::cout << "Node Map: {" << std::endl;
+                    for (int i = 0; i < params.num_nodes; i++) {
+                        std::cout << "\t" << i << "->" << node_map[i] << std::endl;
+                    }
+                    std::cout << "}" << std::endl;
                 }
 
                 // Obtain nodeset information from Exodus file
@@ -143,8 +156,8 @@ namespace ExodusIO {
                     assert(!ex_get_set(readFID, EX_NODE_SET, ids[i], node_list, NULL));
                     
                     for (int j = 0; j < num_nodes_in_set; j++) {
-                        if (initialMap->isNodeGlobalElement(node_list[j])) {
-                            nodeSetMap[ids[i]].insert(node_list[j]);
+                        if (initialMap->isNodeGlobalElement(node_list[j]-1)) {
+                            nodeSetMap[ids[i]].insert(node_list[j]-1);
                         }
                     }
                     delete[] node_list;
@@ -161,7 +174,7 @@ namespace ExodusIO {
                                 int idx = 0;
                                 for (auto id : idSet.second) {
                                     if (idx++) std::cout << ",";
-                                    std::cout << id;
+                                    std::cout << node_map[id];
                                 }
                                 std::cout << "}" << std::endl;
                             }
@@ -179,7 +192,7 @@ namespace ExodusIO {
                 std::map<local_t, local_t> relabelLocalIndexBackward; // reducedMap -> initialMap
                 local_t newIdx = 0;
                 for (local_t i = initialMap->getMinLocalIndex(); i < initialMap->getMaxLocalIndex(); i++) {
-                    global_t gid = initialMap->getGlobalElement(i)+1;
+                    global_t gid = initialMap->getGlobalElement(i);
                     // Check if gid is in any of the nodeset maps
                     bool found = false;
                     for (auto &idSet : nodeSetMap) {
@@ -194,7 +207,78 @@ namespace ExodusIO {
                         newIdx++;
                     }
                 }
+
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << " has " << relabelLocalIndexForward.size() << " relabelLocalIndexForward indices" << std::endl;
+                            for (auto &idx : relabelLocalIndexForward) {
+                                std::cout << "Local index " << node_map[initialMap->getGlobalElement(idx.first)] << " -> " << idx.second << std::endl;
+                            }
+                            std::cout << "Process #" << rank << " has " << relabelLocalIndexBackward.size() << " relabelLocalIndexBackward entries" << std::endl;
+                            for (auto &idx : relabelLocalIndexBackward) {
+                                std::cout << "Local index " << idx.first << " -> " << node_map[initialMap->getGlobalElement(idx.second)] << std::endl;
+                            }
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
                 auto reducedMap = Teuchos::rcp(new Tpetra::Map<>(Teuchos::OrdinalTraits<Tpetra::global_size_t>::invalid(), newIdx, 0, Tpetra::getDefaultComm()));
+                // Helper functions for interacting with relabeled nodes
+                // initialMap.local -> reducedMap.global
+                auto forwardLocalToGlobal = [&](local_t localIdx) -> global_t {
+                    assert(initialMap->isNodeLocalElement(localIdx));
+                    if (!relabelLocalIndexForward.count(localIdx)) {
+                        return invalid;
+                    }
+                    auto newLocalIdx = relabelLocalIndexForward[localIdx];
+                    assert(reducedMap->isNodeLocalElement(newLocalIdx));
+                    return reducedMap->getGlobalElement(newLocalIdx);
+                };
+                // reducedMap.local -> initialMap.global
+                auto backwardLocalToGlobal = [&](local_t localIdx) -> global_t {
+                    assert(reducedMap->isNodeLocalElement(localIdx));
+                    if (!relabelLocalIndexBackward.count(localIdx)) {
+                        return invalid;
+                    }
+                    auto newLocalIdx = relabelLocalIndexBackward[localIdx];
+                    assert(initialMap->isNodeLocalElement(newLocalIdx));
+                    return initialMap->getGlobalElement(newLocalIdx);
+                };
+                // initialMap.global -> reducedMap.local
+                auto forwardGlobalToLocal = [&](global_t globalIdx) -> local_t {
+                    // assert(initialMap->isNodeGlobalElement(globalIdx));
+                    auto localIdx = initialMap->getLocalElement(globalIdx);
+                    if (!relabelLocalIndexForward.count(localIdx)) {
+                        return invalid;
+                    }
+                    auto newLocalIdx = relabelLocalIndexForward[localIdx];
+                    assert(reducedMap->isNodeLocalElement(newLocalIdx));
+                    return newLocalIdx;
+                };
+                // reducedMap.global -> initialMap.local
+                auto backwardGlobalToLocal = [&](global_t globalIdx) -> local_t {
+                    // assert(reducedMap->isNodeGlobalElement(globalIdx));
+                    auto localIdx = reducedMap->getLocalElement(globalIdx);
+                    if (!relabelLocalIndexBackward.count(localIdx)) {
+                        return invalid;
+                    }
+                    auto newLocalIdx = relabelLocalIndexBackward[localIdx];
+                    assert(initialMap->isNodeLocalElement(newLocalIdx));
+                    return newLocalIdx;
+                };
+                // initialMap.global -> reducedMap.global
+                auto forwardGlobalToGlobal = [&](global_t globalIdx) -> global_t {
+                    local_t localIdx = forwardGlobalToLocal(globalIdx);
+                    if (localIdx == invalid) return invalid;
+                    return reducedMap->getGlobalElement(localIdx);
+                };
+                // reducedMap.global -> initialMap.global
+                auto backwardGlobalToGlobal = [&](global_t globalIdx) -> global_t {
+                    local_t localIdx = backwardGlobalToLocal(globalIdx);
+                    if (localIdx == invalid) return invalid;
+                    return initialMap->getGlobalElement(localIdx);
+                };
 
                 // We need to create the Laplacian with only adjacency of the degree-of-freedoms, but also have the
                 // degree of both degree-of-freedom and non-degree-of-freedom neighbors. The current process obtains
@@ -241,17 +325,16 @@ namespace ExodusIO {
                     ex_get_elem_conn(readFID, ids[i], connect);
                     for (idx_t j = 0; j < num_elem_in_block * num_nodes_per_elem; j += num_nodes_per_elem) {
                         for (idx_t k = j; k < j + num_nodes_per_elem; k++) {
-                            if (initialMap->isNodeGlobalElement(connect[k])) {
+                            if (initialMap->isNodeGlobalElement(connect[k]-1)) {
                                 // Check if it belongs to a nodeset (i.e. is a non-DOF node)
                                 // Note, we can just check if relabelMap is -1 for the local index since
                                 // we have already computed whether or not a node is a DOF or not.
-                                local_t node = initialMap->getLocalElement(connect[k]);
-                                if (relabelLocalIndexForward.count(node)) {
-                                    // Add each node in the element to adjacency of this node
+                                global_t globalIdx = forwardGlobalToGlobal(connect[k]-1);
+                                if (globalIdx != invalid) {
                                     for (idx_t l = j; l < j + num_nodes_per_elem; l++) {
                                         if (l == k) continue;
                                         // Note that we may insert non-DOF nodes, which is fine since we need to get the degree anyway
-                                        adjacency[reducedMap->getGlobalElement(node)].insert(connect[l]);
+                                        adjacency[globalIdx].insert(connect[l]);
                                     }
                                 }
                             }
@@ -267,22 +350,20 @@ namespace ExodusIO {
                             std::cout << "Process #" << rank << std::endl;
                             std::cout << "Forward Mappings: {" << std::endl;
                             for (auto fwd : relabelLocalIndexForward) {
-                                std::cout << "\t" << fwd.first + 1 << "(" << initialMap->getGlobalElement(fwd.first) + 1 << ") -> " << fwd.second + 1 << "(" << reducedMap->getGlobalElement(fwd.second) + 1 << ")" << std::endl;
-                            }
-                            std::cout << "}" << std::endl;
-                            std::cout << "Backward Mappings: {" << std::endl;
-                            for (auto bwd : relabelLocalIndexBackward) {
-                                std::cout << "\t" << bwd.first + 1 << "(" << reducedMap->getGlobalElement(bwd.first) + 1 << ") -> " << bwd.second + 1 << "(" << initialMap->getGlobalElement(bwd.second) + 1 << ")" << std::endl;
+                                global_t lhs = initialMap->getGlobalElement(fwd.first);
+                                global_t rhs = forwardGlobalToGlobal(initialMap->getGlobalElement(fwd.first));
+                                std::cout << "\t" << lhs << "(" << node_map[lhs] << ") -> " << rhs << std::endl;
                             }
                             std::cout << "}" << std::endl;
                             std::cout << "Adjacency: {" << std::endl;
                             for (auto &idSet : adjacency) {
-                                std::cout << "\t" << initialMap->getGlobalElement(relabelLocalIndexBackward[reducedMap->getLocalElement(idSet.first)]) + 1 << " => [";
+                                std::cout << "\t" << node_map[backwardGlobalToGlobal(idSet.first)] << " => [";
                                 bool needComma = false;
                                 for (auto node : idSet.second) {
-                                    if (relabelLocalIndexForward.count(initialMap->getLocalElement(node)) == 0) continue;
+                                    global_t newIdx = forwardGlobalToGlobal(node-1);
+                                    if (newIdx == invalid) continue;
                                     if (needComma) std::cout << ",";
-                                    std::cout << node;
+                                    std::cout << node_map[initialMap->getGlobalElement(node-1)];
                                     needComma = true;
                                 }
                                 std::cout << "]" << std::endl;
