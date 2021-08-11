@@ -630,7 +630,7 @@ namespace ExodusIO {
                     int sum = 0;
                     for (auto cell : row) {
                         for (auto &idSet : nodeSetMap) {
-                            if (idSet.second.count(cell)) {
+                            if (idSet.second.count(cell-1)) {
                                 sum += idSet.first;
                                 break;
                             }
@@ -640,7 +640,6 @@ namespace ExodusIO {
                     assert(boundaryConditionIdx != invalid);
                     auto data = _B->get1dViewNonConst();
                     data[_B->getMap()->getLocalElement(id)] = sum;
-                    std::cout << "Process #" << rank << " has set " << id << "(" << boundaryConditionIdx << ") to " << sum << std::endl;
                 }
 
                

@@ -114,7 +114,6 @@ void belosSolver(const Teuchos::RCP<Tpetra::CrsMatrix<>> _A, const Teuchos::RCP<
                     << tTolerance << "." << std::endl;
         }
     }
-    printMultiVector(X);
 }
 
 int main(int argc, char *argv[]) {
@@ -160,19 +159,30 @@ int main(int argc, char *argv[]) {
         if (rank == 0) std::cout << "Printing out CrsMatrix" << std::endl;
         auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
         A->describe(*ostr, verbose ? Teuchos::EVerbosityLevel::VERB_EXTREME : Teuchos::EVerbosityLevel::VERB_MEDIUM);
-        printCrsMatrix(A);
+        if (verbose) printCrsMatrix(A);
 
         // Invoke solver...
         // The linear equation being solved for is 'AX = B', where A is the laplacian matrix,
         // X is the solution (with initial randomized guess), and B is the desired values to converge to.
-        if (rank == 0)  std::cout << "Printing out multivector B" << std::endl;
-        printMultiVector(B);
+        if (verbose) {
+            if (rank == 0)  std::cout << "Printing out multivector B" << std::endl;
+            printMultiVector(B);
+        }
 
         srand(time(NULL));
         X->randomize();
-        if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
-        printMultiVector(X);
+        if (verbose) {
+            if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
+            printMultiVector(X);
+        }
         belosSolver(A, X, B, numIterations, tolerance);
+        // TODO: Investigate the issues where X holds values outside of maximum boundary conditions
+        // TODO: Investigate printing out values via time step variables using:
+        // int ex_put_nodal_var (int exoid, int time_step, int nodal_var_index, int num_nodes, void *nodal_var_vals)
+        if (verbose) {
+            if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
+            printMultiVector(X);
+        }
     }
 
     return 0;
