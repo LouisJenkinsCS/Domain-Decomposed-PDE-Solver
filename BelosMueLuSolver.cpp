@@ -4,6 +4,8 @@
 #include <BelosSolverFactory.hpp>
 #include <Tpetra_MultiVector.hpp>
 #include <Ifpack2_Factory.hpp>
+#include <sstream>
+#include <sys/time.h>
 
 /*
     MueLu crashes in Amesos' 'transpose' function, so we use IFPACK2 instead.
@@ -17,7 +19,13 @@
     Hence the need to condition the matrix, since the goal is to reach convergence (i.e. think gradient descent).
 */
 
-void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, bool sparse=true) {
+uint64_t getTime() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000000ULL + tv.tv_usec;
+}
+
+void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, std::ofstream &output, bool sparse=true) {
     auto rank = Tpetra::getDefaultComm()->getRank();
     auto ranks = Tpetra::getDefaultComm()->getSize();
     auto rows = matrix->getGlobalNumRows();
@@ -25,7 +33,7 @@ void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, bool s
 
     for (int row = 1; row <= rows; row++) {
         if (map->isNodeGlobalElement(row)) {
-            std::cout << "Process #" << rank << ": [";
+            output << row << ": [";
             Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(matrix->getNumEntriesInGlobalRow(row));
             Teuchos::Array<Tpetra::CrsMatrix<>::scalar_type> vals(matrix->getNumEntriesInGlobalRow(row));
             size_t sz;
@@ -34,41 +42,33 @@ void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, bool s
             for (size_t i = 0; i < cols.size(); i++) entries.push_back(std::make_pair(cols[i], vals[i]));
             std::sort(entries.begin(), entries.end());
             for (int i = 0; i < cols.size(); i++) {
-                if (i) std::cout << ",";
-                std::cout << "(" << entries[i].first << "," << entries[i].second << ")";
+                if (i) output << ",";
+                output << "(" << entries[i].first << "," << entries[i].second << ")";
             }
-            std::cout << "]" << std::endl;
+            output << "] ~" << getTime() << "~" << std::endl;
             std::flush(std::cout);
         }
         Teuchos::barrier(*Tpetra::getDefaultComm());
     }
 }
 
-void printMultiVector(const Teuchos::RCP<const Tpetra::MultiVector<>> X) {
+void printMultiVector(const Teuchos::RCP<const Tpetra::MultiVector<>> X, std::ofstream &output) {
     auto rank = Tpetra::getDefaultComm()->getRank();
     auto ranks = Tpetra::getDefaultComm()->getSize();
     auto N = X->getGlobalLength();
     auto map = X->getMap();
     Teuchos::barrier(*Tpetra::getDefaultComm());
     for (int col = 0; col < X->getNumVectors(); col++) {
-        if (rank == 0) {
-            std::cout << "[" << std::endl;
-            std::flush(std::cout);
-        }
         auto vec = X->getVector(col);
         auto copy = vec->get1dView();
 
         for (int row = 0; row <= vec->getGlobalLength(); row++) {
             if (vec->getMap()->isNodeGlobalElement(row)) {
-                std::cout << "\tProcess #" << rank << ": " << row << " => [";
-                std::cout << copy[vec->getMap()->getLocalElement(row)];
-                std::cout << "]" << std::endl;
-                std::flush(std::cout);
+                output << row << ": [" << copy[vec->getMap()->getLocalElement(row)] << "] ~" << getTime() << "~" << std::endl;
             }
             Teuchos::barrier(*Tpetra::getDefaultComm());
         }
         Teuchos::barrier(*Tpetra::getDefaultComm());
-        if (rank == 0) std::cout << "]" << std::endl;
     }
 }
 
@@ -121,6 +121,7 @@ int main(int argc, char *argv[]) {
     {
         Teuchos::CommandLineProcessor cmdp(false, false);
         std::string inputFile = "";
+        std::string outputPrefix = "mpi-proc-";
         bool verbose = false;
         size_t numIterations = 300;
         size_t reportAfterIterations = 10;
@@ -130,6 +131,7 @@ int main(int argc, char *argv[]) {
         cmdp.setOption("iterations", &numIterations, "Maximum number of iterations that the solver will run for [default=300]");
         cmdp.setOption("reportAfterIterations", &reportAfterIterations, "Number of iterations between checks for convergence, and if --verbose, how often information gets logged [default=10]");
         cmdp.setOption("tolerance", &tolerance, "Tolerance for convergence [default=1e-14]");
+        cmdp.setOption("outputPrefix", &outputPrefix, "Prefix for output files, will create prefix for output $PREFIX-$RANK.out [default=mpi-proc-]");
         cmdp.parse(argc, argv);
         auto comm = Tpetra::getDefaultComm();
         int rank = Teuchos::rank(*comm);
@@ -147,6 +149,15 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
+        std::stringstream outputFile;
+        outputFile << outputPrefix << rank << ".out";
+        std::ofstream output(outputFile.str());
+        if (!output.good()) {
+            std::cerr << "Process #" << rank << ": Failed to open output file '" << outputFile.str() << "'" << std::endl;
+            return EXIT_FAILURE;
+        }
+        
+
         Teuchos::RCP<Tpetra::CrsMatrix<>> A;
         Teuchos::RCP<Tpetra::MultiVector<>> X;
         Teuchos::RCP<Tpetra::MultiVector<>> B;
@@ -159,30 +170,28 @@ int main(int argc, char *argv[]) {
         if (rank == 0) std::cout << "Printing out CrsMatrix" << std::endl;
         auto ostr = Teuchos::VerboseObjectBase::getDefaultOStream();
         A->describe(*ostr, verbose ? Teuchos::EVerbosityLevel::VERB_EXTREME : Teuchos::EVerbosityLevel::VERB_MEDIUM);
-        if (verbose) printCrsMatrix(A);
+        output << "[Laplacian: A]" << std::endl;
+        printCrsMatrix(A, output);
 
         // Invoke solver...
         // The linear equation being solved for is 'AX = B', where A is the laplacian matrix,
         // X is the solution (with initial randomized guess), and B is the desired values to converge to.
-        if (verbose) {
-            if (rank == 0)  std::cout << "Printing out multivector B" << std::endl;
-            printMultiVector(B);
-        }
+        if (rank == 0)  std::cout << "Printing out multivector B" << std::endl;
+        output << "[RHS: B]" << std::endl;
+        printMultiVector(B, output);
 
         srand(time(NULL));
         X->randomize();
-        if (verbose) {
-            if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
-            printMultiVector(X);
-        }
+        if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
+        output << "[Randomized: X]" << std::endl;
+        printMultiVector(X, output);
         belosSolver(A, X, B, numIterations, tolerance);
         // TODO: Investigate the issues where X holds values outside of maximum boundary conditions
         // TODO: Investigate printing out values via time step variables using:
         // int ex_put_nodal_var (int exoid, int time_step, int nodal_var_index, int num_nodes, void *nodal_var_vals)
-        if (verbose) {
-            if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
-            printMultiVector(X);
-        }
+        if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
+        output << "[Solution: X]" << std::endl;
+        printMultiVector(X, output);
     }
 
     return 0;
