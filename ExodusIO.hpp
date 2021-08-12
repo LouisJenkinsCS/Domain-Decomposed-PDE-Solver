@@ -36,6 +36,10 @@
       isolated to just writing out the mesh than reading in the mesh.
     - The process has been manually verified on the smallest and simplest mesh, data/rectangle-tris.exo, but is very likely to
       work on other larger meshes.
+    - For extremely large meshes, decomposing the Exodus file into multiple files (`decomp`) will likely be necessary since the
+      Exodus API reads in O(N) data entirely into memory very often, where N is the number of nodes. The current code base would
+      require some rather significant tweaking and rewriting as right now there is an assumption that each process is reading the
+      same mesh file.
     
     METIS:
     
@@ -113,7 +117,6 @@ namespace ExodusIO {
                 /////////////////////////////////////////////////////////////////////
 
                 // Gather all data we need to pass to ParMETIS - Each MPI Process is doing this...
-                ex_init_params params;
                 if (ex_get_init_ext(readFID,&params)) {
                     return false;
                 }
@@ -127,8 +130,8 @@ namespace ExodusIO {
                 }
 
                 // WARNING: Nodemap reads everything on a single node!
-                int *node_map = new int[params.num_nodes];
-                ex_get_node_num_map(readFID, node_map);
+                node_map = new int[params.num_nodes];
+                ex_get_id_map(readFID, EX_NODE_MAP, node_map);
 
                 if (verbose && rank == 0) {
                     std::cout << "Node Map: {" << std::endl;
@@ -143,7 +146,7 @@ namespace ExodusIO {
                 // at once... this means that we can end up with an Out-of-Memory problem,
                 // so each process only keeps track of local nodeset information. 
                 auto initialMap = Teuchos::rcp(new Tpetra::Map<>(params.num_nodes, 0, comm));
-                std::map<int, std::set<idx_t>> nodeSetMap;
+                nodeSetMap.clear();
                 int *ids = new int[params.num_node_sets];
                 ex_get_ids(readFID, EX_NODE_SET, ids);
                 
@@ -484,6 +487,7 @@ namespace ExodusIO {
 
                     perProcessMappingSize++;
                 }
+                assert(currNodeID != -1);
                 perProcessMapping[currNodeID].resize(perProcessMappingSize+1);
                 
                 isFirstNode = true;
@@ -641,8 +645,6 @@ namespace ExodusIO {
                     auto data = _B->get1dViewNonConst();
                     data[_B->getMap()->getLocalElement(id)] = sum;
                 }
-
-               
                 
                 Zoltan2::XpetraMultiVectorAdapter<Tpetra::MultiVector<>> vectorAdapter(_B);
                 vectorAdapter.applyPartitioningSolution(*_B, *B, problem.getSolution());
@@ -1892,6 +1894,80 @@ namespace ExodusIO {
                 return true;
             }
 
+            // Handle writing node variables for a given timestep
+            bool writeSolution(Teuchos::RCP<Tpetra::MultiVector<>> vec, const int timestep, bool verbose = false) {
+                if (writeFID == -1 || readFID == -1) {
+                    return false;
+                }
+
+                auto comm = Tpetra::getDefaultComm();
+                int rank = comm->getRank();
+                int ranks = comm->getSize();
+                real_t *node_vals = nullptr;
+                if (rank == 0) {
+
+                    // Gather all non-DOF nodes and their values. These needs to be written at the current timestep,
+                    // and they are assumed to be constant at each timestep.
+                    node_vals = new real_t[params.num_nodes];
+                    for (auto &idSet : nodeSetMap) {
+                        int id = idSet.first;
+                        auto &set = idSet.second;
+                        for (auto node : set) {
+                            node_vals[node] = id;
+                        }
+                    }
+                }
+
+                // Gather all solutions to a single node... note that there is no other way but to
+                // read in _all_ solutions to a single node and write them back.
+                // WARNING: Assumes 1-to-1 between indices and values!
+                auto _indices = vec->getMap()->getNodeElementList();
+                Tpetra::Details::DefaultTypes::global_ordinal_type *indices = new Tpetra::Details::DefaultTypes::global_ordinal_type[_indices.size()];
+                for (int i = 0; i < _indices.size(); i++) {
+                    indices[i] = globalIDMap[_indices[i]];
+                }
+                auto values = vec->get1dView();
+
+                // Gather across all nodes
+                std::vector<size_t> gatheredIndices[ranks];
+                std::vector<real_t> gatheredValues[ranks];
+                if (rank == 0) {
+                    // Collect everyone elses results
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) continue;
+                        size_t sz = 0;
+                        MPI_Recv(&sz, 1, MPI_UNSIGNED_LONG_LONG, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        if (sz == 0) {
+                            if (verbose) std::cout << "Process #" << i << " has no values to send." << std::endl;
+                            continue;
+                        }
+                        gatheredIndices[i].resize(sz);
+                        gatheredValues[i].resize(sz);
+                        MPI_Recv(&gatheredIndices[i][0], sz, MPI_UNSIGNED_LONG_LONG, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        MPI_Recv(&gatheredValues[i][0], sz, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    }
+                } else {
+                    // Send my results
+                    size_t sz = _indices.size();
+                    MPI_Send(&sz, 1, MPI_UNSIGNED_LONG_LONG, 0, 0, MPI_COMM_WORLD);
+                    if (sz != 0) {
+                        MPI_Send(&indices[0], sz, MPI_UNSIGNED_LONG_LONG, 0, 0, MPI_COMM_WORLD);
+                        MPI_Send(&values[0], sz, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+                    }
+                }
+
+                // Take the gathered results and collect them into `node_vals`
+                if (rank == 0) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (rank == i) continue;
+                        for (size_t j = 0; j < gatheredIndices[i].size(); j++) {
+                            node_vals[gatheredIndices[i][j]] = gatheredValues[i][j];
+                        }
+                    }
+                    ex_put_nodal_var(writeFID, timestep, 1, params.num_nodes, node_vals);
+                    delete[] node_vals;
+                }
+            }
 
             ~IO() {
                 if (readFID != -1) {
@@ -1906,5 +1982,19 @@ namespace ExodusIO {
             int readFID = -1;
             int writeFID = -1;
 
+            // Cached values so we don't need to repeatedly query the Exodus file between calls
+            ex_init_params params;
+            std::map<int, std::set<idx_t>> nodeSetMap;
+            int *node_map = nullptr;
+            
+
+            // Each process will, after calling the `assemble` method, will have a dense mapping of
+            // each global index to the global index it corresponded to in the original mesh. This is
+            // because we need to acquire the original mesh node ids to interact with the Exodus API, such
+            // as when writing out the result. To avoid keeping all of the ids on a single node, each process
+            // only stores id mappings for global indices that they own. In the event that a process requires
+            // the global mappings of some other process, we can set up an MPI_Win for one-sided communication.
+            std::map<Tpetra::CrsMatrix<>::global_ordinal_type, Tpetra::CrsMatrix<>::global_ordinal_type> globalIDMap;
+            
     };
 };

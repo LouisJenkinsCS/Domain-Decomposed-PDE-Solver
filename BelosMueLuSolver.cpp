@@ -31,7 +31,7 @@ void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, std::o
     auto rows = matrix->getGlobalNumRows();
     auto map = matrix->getRowMap();
 
-    for (int row = 1; row <= rows; row++) {
+    for (int row = 0; row <= rows; row++) {
         if (map->isNodeGlobalElement(row)) {
             output << row << ": [";
             Teuchos::Array<Tpetra::CrsMatrix<>::global_ordinal_type> cols(matrix->getNumEntriesInGlobalRow(row));
