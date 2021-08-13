@@ -416,7 +416,14 @@ namespace ExodusIO {
                 // and obtaining their global indices (obtained by indexing directly into the remote process' dense mappings), we can
                 // cut down the amount of space stored on each node. We use an MPI Window allowing other processes to directly GET the
                 // information without the extra tedium and difficulty involved with two-sided communication.
-                // See `getIndexMappingAfterRedistribution` for more details.
+                MPI_Win mappingWindow;
+                global_t *globalIndices;
+                MPI_Win_allocate(sizeof(global_t) * initialMap->getNodeNumElements(), sizeof(global_t), MPI_INFO_NULL, MPI_COMM_WORLD, &globalIndices, &mappingWindow);
+                for (local_t i = initialMap->getMinLocalIndex(); i < initialMap->getMaxLocalIndex(); i++) {
+                    // Gather initialMap -> reducedMap mappings
+                    globalIndices[i] = forwardLocalToGlobal(i);
+                    assert(globalIndices[i] != invalid || !isDOF(initialMap->getGlobalElement(i)));
+                }
 
                 // Our sparse mappings of initialMap -> reducedMap based on newAdjacency; should include local mappings too
                 std::map<global_t, global_t> sparseMapping; // global initialMap -> global reducedMap
@@ -441,7 +448,106 @@ namespace ExodusIO {
                         GIDList[i++] = id;
                     }
                 }
-                getIndexMappingAfterRedistribution(GIDList, initialMap, sparseMapping, forwardLocalToGlobal, verbose);
+                Teuchos::Array<int> nodeIDs(GIDList.size());
+                Teuchos::Array<local_t> LIDList(GIDList.size());
+                assert(initialMap->getRemoteIndexList(GIDList, nodeIDs, LIDList) == Tpetra::LookupStatus::AllIDsPresent);
+                
+                // Optimization: Sort based on NodeIDs so that we can, in bulk, retrieve elements by locking the MPI Window only once.
+                std::vector<std::tuple<int, global_t, local_t>> sortedTriple; // (rank, globalIdx, localIdx)
+                for (int i = 0; i < nodeIDs.size(); i++) {
+                    sortedTriple.push_back(std::make_tuple(nodeIDs[i], GIDList[i], LIDList[i]));
+                }
+                std::sort(sortedTriple.begin(), sortedTriple.end(), [](const std::tuple<int, global_t, local_t> &a, const std::tuple<int, global_t, local_t> &b) {
+                    return std::get<0>(a) < std::get<0>(b);
+                });
+
+                if (verbose) {
+                    for (int i = 0; i < ranks; i++) {
+                        if (i == rank) {
+                            std::cout << "Process #" << rank << " has " << sortedTriple.size() << " neighbors to query" << std::endl;
+                            for (auto &t : sortedTriple) {
+                                std::cout << "\t" << std::get<0>(t) << ": " << std::get<1>(t) << " -> " << std::get<2>(t) << std::endl;
+                            }
+                        }
+                        Teuchos::barrier(*comm);
+                    }
+                }
+
+                // Access remote global mappings with optimization that we only need to unlock once we find a new nodeID
+                // First allocate the receiving buffers
+                std::vector<global_t> perProcessMapping[ranks];
+                int perProcessMappingSize = 0;
+                bool isFirstNode = true;
+                int currNodeID = -1;
+                for (auto &t : sortedTriple) {
+                    int nodeID = std::get<0>(t);
+                    global_t globalIdx = std::get<1>(t);
+                    local_t localIdx = std::get<2>(t);
+                    if (isFirstNode) {
+                        isFirstNode = false;
+                        currNodeID = nodeID;
+                    }
+                    
+                    if (currNodeID != nodeID) {
+                        perProcessMapping[currNodeID].resize(perProcessMappingSize+1);
+                        currNodeID = nodeID;
+                        perProcessMappingSize = 0;
+                    }
+
+                    perProcessMappingSize++;
+                }
+                assert(currNodeID != -1);
+                perProcessMapping[currNodeID].resize(perProcessMappingSize+1);
+                
+                // Next, fetch the global id mappings from each processor
+                isFirstNode = true;
+                currNodeID = -1;
+                perProcessMappingSize = 0;
+                for (auto &t : sortedTriple) {
+                    int nodeID = std::get<0>(t);
+                    global_t globalIdx = std::get<1>(t);
+                    local_t localIdx = std::get<2>(t);
+                    if (isFirstNode) {
+                        isFirstNode = false;
+                        MPI_Win_lock(MPI_LOCK_SHARED, nodeID, 0, mappingWindow);
+                        currNodeID = nodeID;
+                    }
+
+                    if (currNodeID != nodeID) {
+                        MPI_Win_unlock(currNodeID, mappingWindow);
+                        currNodeID = nodeID;
+                        perProcessMappingSize = 0;
+                        MPI_Win_lock(MPI_LOCK_SHARED, nodeID, 0, mappingWindow);
+                    }
+
+                    perProcessMapping[nodeID][perProcessMappingSize] = invalid;
+                    MPI_Get(&perProcessMapping[nodeID][perProcessMappingSize++], 1, sizeof(global_t) == 8 ? MPI_LONG : MPI_INT, nodeID, localIdx, 1, sizeof(global_t) == 8 ? MPI_LONG : MPI_INT, mappingWindow);
+                }
+                MPI_Win_unlock(currNodeID, mappingWindow);
+
+                MPI_Win_free(&mappingWindow);
+                
+                // Now construct the actual mapping now that all asynchronous communication has ended.
+                isFirstNode = true;
+                currNodeID = -1;
+                perProcessMappingSize = 0;
+                for (auto &t : sortedTriple) {
+                    int nodeID = std::get<0>(t);
+                    global_t globalIdx = std::get<1>(t);
+                    local_t localIdx = std::get<2>(t);
+                    if (isFirstNode) {
+                        isFirstNode = false;
+                        currNodeID = nodeID;
+                    }
+                    
+                    if (currNodeID != nodeID) {
+                        currNodeID = nodeID;
+                        perProcessMappingSize = 0;
+                    }
+
+                    sparseMapping[globalIdx] = perProcessMapping[nodeID][perProcessMappingSize++];
+                }
+
                 // Construct reverse mapping
                 for (auto &idMap : sparseMapping) {
                     global_t i = idMap.first;
@@ -575,11 +681,11 @@ namespace ExodusIO {
                 for (int i = 0; i < myGlobalIndices.size(); i++) {
                     GIDList[i] = myGlobalIndices[i];
                 }
-                // nodeIDs.resize(myGlobalIndices.size());
-                // nodeIDs.clear();
-                // LIDList.resize(myGlobalIndices.size());
-                // LIDList.clear();
-                // laplacian->getRowMap()->getRemoteIndexList(GIDList, LIDList, nodeIDs);
+                nodeIDs.clear();
+                nodeIDs.resize(myGlobalIndices.size());
+                LIDList.clear();
+                LIDList.resize(myGlobalIndices.size());
+                laplacian->getRowMap()->getRemoteIndexList(GIDList, LIDList, nodeIDs);
                 
                 
                 return true;
