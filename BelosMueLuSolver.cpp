@@ -192,7 +192,7 @@ int main(int argc, char *argv[]) {
         if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
         output << "[Solution: X]" << std::endl;
         printMultiVector(X, output);
-        io.writeSolution(X, 1, verbose);
+        // io.writeSolution(X, 1, verbose);
     }
 
     return 0;
