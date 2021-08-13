@@ -40,6 +40,11 @@
       Exodus API reads in O(N) data entirely into memory very often, where N is the number of nodes. The current code base would
       require some rather significant tweaking and rewriting as right now there is an assumption that each process is reading the
       same mesh file.
+    - Sometimes, O(N) (for N nodes) of data is stored on a single node, i.e. for the node map (mapping of node indices used when presenting
+      the Exodus mesh in an application like Cubit or Paraview) or the solution to the problem (Tpetra::MultiVector with only 1 column),
+      but we make sure to never have the entire matrix on a single node. This is a massive difference, as larger and more complex meshes
+      can have as much a maximum number of cells per row k=25 which would be O(N*k) memory. Hence while it could be better, it is not
+      naive. 
     
     METIS:
     
@@ -433,6 +438,9 @@ namespace ExodusIO {
                     }
                 }
 
+                // This newAdjacency set contains global ids in the initialMap that we are adjacent to; we need to translate
+                // them into global ids in the reducedMap. We call `getRemoteIndexList` which yields the local id (index in the
+                // 1D array of globalMappings [initialMap -> reducedMap]) and the process it is allocated on.
                 Teuchos::Array<global_t> GIDList(neighborsToQuery.size());
                 {
                     int i = 0;
@@ -466,6 +474,7 @@ namespace ExodusIO {
                 }
 
                 // Access remote global mappings with optimization that we only need to unlock once we find a new nodeID
+                // First allocate the receiving buffers
                 std::vector<global_t> perProcessMapping[ranks];
                 int perProcessMappingSize = 0;
                 bool isFirstNode = true;
@@ -490,6 +499,7 @@ namespace ExodusIO {
                 assert(currNodeID != -1);
                 perProcessMapping[currNodeID].resize(perProcessMappingSize+1);
                 
+                // Next, fetch the global id mappings from each processor
                 isFirstNode = true;
                 currNodeID = -1;
                 perProcessMappingSize = 0;
@@ -514,7 +524,10 @@ namespace ExodusIO {
                     MPI_Get(&perProcessMapping[nodeID][perProcessMappingSize++], 1, sizeof(global_t) == 8 ? MPI_LONG : MPI_INT, nodeID, localIdx, 1, sizeof(global_t) == 8 ? MPI_LONG : MPI_INT, mappingWindow);
                 }
                 MPI_Win_unlock(currNodeID, mappingWindow);
+
+                MPI_Win_free(&mappingWindow);
                 
+                // Now construct the actual mapping now that all asynchronous communication has ended.
                 isFirstNode = true;
                 currNodeID = -1;
                 perProcessMappingSize = 0;
@@ -533,6 +546,13 @@ namespace ExodusIO {
                     }
 
                     sparseMapping[globalIdx] = perProcessMapping[nodeID][perProcessMappingSize++];
+                }
+
+                // Construct reverse mapping
+                for (auto &idMap : sparseMapping) {
+                    global_t i = idMap.first;
+                    global_t j = idMap.second;
+                    globalIDMap[j] = i;
                 }
 
                 if (verbose) {
@@ -648,6 +668,15 @@ namespace ExodusIO {
                 
                 Zoltan2::XpetraMultiVectorAdapter<Tpetra::MultiVector<>> vectorAdapter(_B);
                 vectorAdapter.applyPartitioningSolution(*_B, *B, problem.getSolution());
+
+                // Since the mapping has likely changed again after partitioning via Zoltan2, we need
+                // to send the global id mappings to the right processes again. We compute the remote index list
+                // of the new Tpetra::Map, and leverage the previous distribution to figure out whom to send what.
+                // We take the indices in the new distribution, and fetch the remote index list (GID, PID, LID) of
+                // the old distribution and take that. The PID is the rank of the process, LID is the local index
+                // in the array of old mappings we are indexing into, and GID is the global index, which we should own.
+                // TODO
+
                 return true;
             }
 

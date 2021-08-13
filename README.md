@@ -1,15 +1,8 @@
-# Simple Mesh Example
+# Mesh PDE Solver
 
-Domain decomposition for a simple mesh, using Trilinos' Tpetra and Zoltan2. 
+**TODO:** Under Construction
 
-![Mesh](ExampleMesh.png)
-
-- [x] Exodus File I/O
-    - [x] Read Exodus File into Memory
-    - [x] Partition Elements and Nodes
-        - [x] METIS
-        - [ ] ParMETIS
-    - [x] Write Domain Decomposed Exodus File
-        - [x] Element Partitions as Element Blocks
-        - [ ] Node Partitions as NodeSets
-- [ ] Partial Differential Equations (PDE) and Laplace's Equation
+Performs domain decomposition (partitioning of the mesh across multiple processes) via ParMETIS/METIS/Zoltan2,
+assembles matrices required to solve some partial differential equation (PDE), and writes out the solution to
+the original mesh, which is in Exodus-II Format. Currently only solves the Steady-State Heat Equation, assembling
+the necessary matrices in the equation: A X = B
