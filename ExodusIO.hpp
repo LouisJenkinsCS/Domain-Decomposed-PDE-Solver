@@ -669,24 +669,34 @@ namespace ExodusIO {
                 Zoltan2::XpetraMultiVectorAdapter<Tpetra::MultiVector<>> vectorAdapter(_B);
                 vectorAdapter.applyPartitioningSolution(*_B, *B, problem.getSolution());
                 
-                // Since the mapping has likely changed again after partitioning via Zoltan2, we need
-                // to send the global id mappings to the right processes again. We compute the remote index list
-                // of the new Tpetra::Map, and leverage the previous distribution to figure out whom to send what.
-                // We take the indices in the new distribution, and fetch the remote index list (GID, PID, LID) of
-                // the old distribution and take that. The PID is the rank of the process, LID is the local index
-                // in the array of old mappings we are indexing into, and GID is the global index, which we should own.
-                // globalIndices = new global_t[(*A)->getRowMap()->getNodeNumElements()];
-                auto myGlobalIndices = (*A)->getRowMap()->getMyGlobalIndices();
-                GIDList.resize(myGlobalIndices.size());
-                for (int i = 0; i < myGlobalIndices.size(); i++) {
-                    GIDList[i] = myGlobalIndices[i];
+                // Since the mapping has likely changed again after partitioning via Zoltan2, we need to
+                // gather the mapping of indices on process #0, because process #0 is resposible for
+                // writing to the Exodus-II file.
+                if (rank == 0) {
+                    // Receive all users mappings
+                    for (int i = 1; i < ranks; i++) {
+                        std::vector<std::pair<global_t, global_t>> otherGlobalMappings;
+                        size_t sz = 0;
+                        MPI_Recv(&sz, 1, MPI_UNSIGNED_LONG_LONG, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        otherGlobalMappings.resize(sz);
+                        MPI_Recv(&otherGlobalMappings[0], sizeof(std::pair<global_t, global_t>) * sz, MPI_BYTE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        for (auto &mapping : otherGlobalMappings) {
+                            globalIDMap.insert(mapping);
+                        }
+                    }
+                } else {
+                    std::vector<std::pair<global_t, global_t>> ourGlobalMappings(globalIDMap.size());
+                    {
+                        int i = 0;
+                        for (auto &idxRow : globalIDMap) {
+                            ourGlobalMappings[i++] = std::make_pair(idxRow.first, idxRow.second);
+                        }
+                    }
+                    // Send size and then mappings
+                    size_t sz = ourGlobalMappings.size();
+                    MPI_Send(&sz, 1, MPI_UNSIGNED_LONG_LONG, 0, 0, MPI_COMM_WORLD);
+                    MPI_Send(&ourGlobalMappings[0], sizeof(std::pair<global_t, global_t>) * sz, MPI_BYTE, 0, 0, MPI_COMM_WORLD);
                 }
-                nodeIDs.clear();
-                nodeIDs.resize(myGlobalIndices.size());
-                LIDList.clear();
-                LIDList.resize(myGlobalIndices.size());
-                laplacian->getRowMap()->getRemoteIndexList(GIDList, LIDList, nodeIDs);
-                
                 
                 return true;
             }
@@ -1464,7 +1474,6 @@ namespace ExodusIO {
                 if (readFID == -1) return false;
 
                 // Gather all data we need to pass to Metis
-                ex_init_params params;
                 if (ex_get_init_ext(readFID,&params)) {
                     return false;
                 }
@@ -1478,11 +1487,6 @@ namespace ExodusIO {
                 }
                 int *ids = new int[params.num_elem_blk];
                 for (int i = 0; i < params.num_elem_blk; i++) ids[i] = 0;
-                idx_t num_elem_in_block = 0;
-                idx_t num_nodes_per_elem = 0;
-                idx_t num_edges_per_elem = 0;
-                idx_t num_faces_per_elem = 0;
-                idx_t num_attr = 0;
                 char elemtype[MAX_STR_LENGTH+1];
 
                 if (ex_get_ids(readFID, EX_ELEM_BLOCK, ids)) {
@@ -1503,6 +1507,11 @@ namespace ExodusIO {
 
                 // using the element block parameters read the element block info
                 for (idx_t i=0; i<params.num_elem_blk; i++) {
+                    idx_t num_elem_in_block = 0;
+                    idx_t num_nodes_per_elem = 0;
+                    idx_t num_edges_per_elem = 0;
+                    idx_t num_faces_per_elem = 0;
+                    idx_t num_attr = 0;
                     if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype, &num_elem_in_block, &num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) {
                         std::cerr << "Failed to `ex_get_block` element block " << i+1 << " of " << params.num_elem_blk << " with id " << ids[i] << std::endl;
                         return false;
@@ -1607,6 +1616,11 @@ namespace ExodusIO {
                 std::vector<idx_t> elembin[nparts];
                 idx_t idx = 0;
                 for (idx_t i=0; i<params.num_elem_blk; i++) {
+                    idx_t num_elem_in_block = 0;
+                    idx_t num_nodes_per_elem = 0;
+                    idx_t num_edges_per_elem = 0;
+                    idx_t num_faces_per_elem = 0;
+                    idx_t num_attr = 0;
                     if (ex_get_block(readFID, EX_ELEM_BLOCK, ids[i], elemtype,&num_elem_in_block,&num_nodes_per_elem, &num_edges_per_elem, &num_faces_per_elem, &num_attr)) return false;
     
                     idx_t *connect = new idx_t[num_elem_in_block * num_nodes_per_elem];
@@ -1784,32 +1798,9 @@ namespace ExodusIO {
                     delete[] dist_fact;
                 }
                 delete[] ids;
-                
-                /* Commented out as Cubit crashes when you have nodesets that encompass the entire mesh */
-                // idx_t nid = params.num_node_sets + 1;
-                // for (int i = 0; i < nparts; i++) {
-                //     std::cout << "Nodeset #" << nid << ": [";
-                //     for (int j = 0; j < nodebin[i].size(); j++) {
-                //         if (j) std::cout << ",";
-                //         std::cout << nodebin[i][j];
-                //     }
-                //     std::cout << "]" << std::endl;
-                //     int error;
-                //     if ((error = ex_put_set_param(writeFID, EX_NODE_SET, nid, nodebin[i].size(), 0))) {
-                //         std::cerr << "Failed to put set parameters for nodeset #" << nid << std::endl;
-                //         std::cerr << "Parameters: (writeFID=" << writeFID << ", EX_NODE_SET, nid=" << nid << ", num_nodes=" << nodebin[i].size() << ", num_df=0)" << std::endl; 
-                //         std::cerr << "Error: " << error << ", status = " << ex_strerror(error) << std::endl;
-                //         return false;
-                //     }
-                //     if (ex_put_set(writeFID, EX_NODE_SET, nid, nodebin[i].data(), NULL)) {
-                //         std::cerr << "Failed to put set for nodeset #" << nid << std::endl;
-                //         return false;
-                //     }
-                //     std::cout << "Writing nodeset #" << nid << std::endl;
-                //     nid++;
-                // }
 
                 /* read node set properties */
+                if (verbose) std::cout << "Reading nodesets!" << std::endl;
                 idx_t num_props;
                 float fdum;
                 char *cdum = NULL;
@@ -1833,9 +1824,12 @@ namespace ExodusIO {
                     delete[] prop_names[i];
                 }
                 delete[] prop_values;
+
+                if (verbose) std::cout << "Written nodesets!" << std::endl;
                 
                 /* read and write individual side sets */
                 
+                if (verbose) std::cout << "Reading sidesets!" << std::endl;
                 ids = new int[params.num_side_sets];
                 
                 ex_get_ids(readFID, EX_SIDE_SET, ids);
@@ -1868,6 +1862,10 @@ namespace ExodusIO {
                     delete[] node_list;
                     delete[] dist_fact;
                 }
+
+                if (verbose) std::cout << "Written sidesets!" << std::endl;
+
+                if (verbose) std::cout << "Reading sideset properties!" << std::endl;
                 
                 /* read side set properties */
                 ex_inquire(readFID, EX_INQ_SS_PROP, &num_props, &fdum, cdum);
@@ -1892,26 +1890,36 @@ namespace ExodusIO {
                     delete[] prop_names[i];
                 }
                 delete[] ids;
+
+                if (verbose) std::cout << "Written sideset properties!" << std::endl;
                 
                 /* read and write QA records */
-                idx_t num_qa_rec = -1;
-                ex_inquire(readFID, EX_INQ_QA, &num_qa_rec, &fdum, cdum);
-                char *qa_record[2][4];
-                for (idx_t i = 0; i < num_qa_rec; i++) {
-                    for (idx_t j = 0; j < 4; j++) {
-                        qa_record[i][j] = new char[(MAX_STR_LENGTH + 1)];
+                {
+                    if (verbose) std::cout << "Reading QA records!" << std::endl;
+                    idx_t num_qa_rec = -1;
+                    ex_inquire(readFID, EX_INQ_QA, &num_qa_rec, &fdum, cdum);
+                    char *qa_record[num_qa_rec][4];
+                    for (idx_t i = 0; i < num_qa_rec; i++) {
+                        for (idx_t j = 0; j < 4; j++) {
+                            qa_record[i][j] = new char[(MAX_STR_LENGTH + 1)];
+                        }
                     }
-                }
-                
-                ex_get_qa(readFID, qa_record);
-                ex_put_qa(writeFID, num_qa_rec, qa_record);
-                
-                for (idx_t i = 0; i < num_qa_rec; i++) {
-                    for (idx_t j = 0; j < 4; j++) {
-                        delete[] qa_record[i][j];
+                    
+                    ex_get_qa(readFID, qa_record);
+                    ex_put_qa(writeFID, num_qa_rec, qa_record);
+                    
+                    for (idx_t i = 0; i < num_qa_rec; i++) {
+                        for (idx_t j = 0; j < 4; j++) {
+                            delete[] qa_record[i][j];
+                        }
                     }
+                    
+                    if (verbose) std::cout << "Written QA records!" << std::endl;
                 }
+
                 /* read and write information records */
+                if (verbose) std::cout << "Reading information records!" << std::endl;
+
                 idx_t num_info = -1;
                 ex_inquire(readFID, EX_INQ_INFO, &num_info, &fdum, cdum);
                 char *info[num_info];
@@ -1926,7 +1934,10 @@ namespace ExodusIO {
                     delete[] info[i];
                 }
 
+                if (verbose) std::cout << "Written information records!" << std::endl;
+
                 // Write node maps
+                if (verbose) std::cout << "Writing node maps!" << std::endl;
                 int *node_map = new int[params.num_nodes];
                 ex_get_node_num_map(readFID, node_map);
                 ex_put_node_num_map(writeFID, node_map);
@@ -1936,10 +1947,6 @@ namespace ExodusIO {
 
             // Handle writing node variables for a given timestep
             bool writeSolution(Teuchos::RCP<Tpetra::MultiVector<>> vec, const int timestep, bool verbose = false) {
-                if (writeFID == -1 || readFID == -1) {
-                    return false;
-                }
-
                 auto comm = Tpetra::getDefaultComm();
                 int rank = comm->getRank();
                 int ranks = comm->getSize();
@@ -1949,6 +1956,7 @@ namespace ExodusIO {
                     // Gather all non-DOF nodes and their values. These needs to be written at the current timestep,
                     // and they are assumed to be constant at each timestep.
                     node_vals = new real_t[params.num_nodes];
+                    for (int i = 0; i < params.num_nodes; i++) node_vals[i] = 0.0f;
                     for (auto &idSet : nodeSetMap) {
                         int id = idSet.first;
                         auto &set = idSet.second;
@@ -1961,12 +1969,9 @@ namespace ExodusIO {
                 // Gather all solutions to a single node... note that there is no other way but to
                 // read in _all_ solutions to a single node and write them back.
                 // WARNING: Assumes 1-to-1 between indices and values!
-                auto _indices = vec->getMap()->getNodeElementList();
-                Tpetra::Details::DefaultTypes::global_ordinal_type *indices = new Tpetra::Details::DefaultTypes::global_ordinal_type[_indices.size()];
-                for (int i = 0; i < _indices.size(); i++) {
-                    indices[i] = globalIDMap[_indices[i]];
-                }
+                auto indices = vec->getMap()->getNodeElementList();
                 auto values = vec->get1dView();
+                assert(indices.size() == values.size());
 
                 // Gather across all nodes
                 std::vector<size_t> gatheredIndices[ranks];
@@ -1984,27 +1989,54 @@ namespace ExodusIO {
                         gatheredIndices[i].resize(sz);
                         gatheredValues[i].resize(sz);
                         MPI_Recv(&gatheredIndices[i][0], sz, MPI_UNSIGNED_LONG_LONG, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                        MPI_Recv(&gatheredValues[i][0], sz, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        MPI_Recv(&gatheredValues[i][0], sz, sizeof(real_t) == 8 ? MPI_DOUBLE : MPI_FLOAT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        if (verbose) std::cout << "Process #0 received " << sz << " values from Process #" << i << std::endl;
                     }
                 } else {
                     // Send my results
-                    size_t sz = _indices.size();
+                    size_t sz = indices.size();
                     MPI_Send(&sz, 1, MPI_UNSIGNED_LONG_LONG, 0, 0, MPI_COMM_WORLD);
                     if (sz != 0) {
                         MPI_Send(&indices[0], sz, MPI_UNSIGNED_LONG_LONG, 0, 0, MPI_COMM_WORLD);
-                        MPI_Send(&values[0], sz, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+                        MPI_Send(&values[0], sz, sizeof(real_t) == 8 ? MPI_DOUBLE : MPI_FLOAT, 0, 0, MPI_COMM_WORLD);
                     }
                 }
 
                 // Take the gathered results and collect them into `node_vals`
                 if (rank == 0) {
+                    // TODO: This may clobber variable names, please make more dynamic by querying the current # of nodal variables
+                    // and appending them.
+                    char *varName = "Steady-State Heat Solution";
+                    assert(ex_put_variable_param(writeFID, EX_NODAL, 1) == 0);
+                    assert(ex_put_variable_names(writeFID, EX_NODAL, 1, &varName) == 0);
+                    real_t t = 0.0;
+                    assert(ex_put_time(writeFID, 1, &t) == 0);
+                    t = 1.0;
+                    assert(ex_put_time(writeFID, 2, &t) == 0);
+                    assert(ex_put_nodal_var(writeFID, 1, 1, params.num_nodes, node_vals) == 0);
+
                     for (int i = 0; i < ranks; i++) {
-                        if (rank == i) continue;
+                        if (rank == i) {
+                            for (int i = 0; i < indices.size(); i++) {
+                                node_vals[globalIDMap[indices[i]]] = values[i];
+                            }
+                        }
                         for (size_t j = 0; j < gatheredIndices[i].size(); j++) {
-                            node_vals[gatheredIndices[i][j]] = gatheredValues[i][j];
+                            assert(globalIDMap.count(gatheredIndices[i][j]));
+                            node_vals[globalIDMap[gatheredIndices[i][j]]] = gatheredValues[i][j];
                         }
                     }
-                    ex_put_nodal_var(writeFID, timestep, 1, params.num_nodes, node_vals);
+                    assert(ex_put_nodal_var(writeFID, timestep+1, 1, params.num_nodes, node_vals) == 0);
+
+                    if (verbose) {
+                        std::cout << "Wrote " << params.num_nodes << " nodal values for timestep " << timestep << "!" << std::endl;
+                        std::cout << "[";
+                        for (int i = 0; i < params.num_nodes; i++) {
+                            if (i) std::cout << ",";
+                            std::cout << node_vals[i];
+                        }
+                        std::cout << "]" << std::endl;
+                    }
                     delete[] node_vals;
                 }
                 return true;

@@ -122,6 +122,7 @@ int main(int argc, char *argv[]) {
         Teuchos::CommandLineProcessor cmdp(false, false);
         std::string inputFile = "";
         std::string outputPrefix = "mpi-proc-";
+        std::string solution = "solution.exo";
         bool verbose = false;
         size_t numIterations = 300;
         size_t reportAfterIterations = 10;
@@ -132,6 +133,7 @@ int main(int argc, char *argv[]) {
         cmdp.setOption("reportAfterIterations", &reportAfterIterations, "Number of iterations between checks for convergence, and if --verbose, how often information gets logged [default=10]");
         cmdp.setOption("tolerance", &tolerance, "Tolerance for convergence [default=1e-14]");
         cmdp.setOption("outputPrefix", &outputPrefix, "Prefix for output files, will create prefix for output $PREFIX-$RANK.out [default=mpi-proc-]");
+        cmdp.setOption("solution", &solution, "The name of the file that contains the solved steady-state heat equation [default='solution.exo']");
         cmdp.parse(argc, argv);
         auto comm = Tpetra::getDefaultComm();
         int rank = Teuchos::rank(*comm);
@@ -183,8 +185,6 @@ int main(int argc, char *argv[]) {
         srand(time(NULL));
         X->randomize();
         if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
-        output << "[Randomized: X]" << std::endl;
-        printMultiVector(X, output);
         belosSolver(A, X, B, numIterations, tolerance);
         // TODO: Investigate the issues where X holds values outside of maximum boundary conditions
         // TODO: Investigate printing out values via time step variables using:
@@ -192,7 +192,13 @@ int main(int argc, char *argv[]) {
         if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
         output << "[Solution: X]" << std::endl;
         printMultiVector(X, output);
-        // io.writeSolution(X, 1, verbose);
+        if (rank == 0) {
+            if (!io.create(solution)) {
+                std::cerr << "Process #" << rank << ": Failed to create output file '" << solution << "'" << std::endl;
+            }
+            io.decompose(comm->getSize(), verbose);
+        }
+        io.writeSolution(X, 1, verbose);
     }
 
     return 0;
