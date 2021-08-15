@@ -1975,7 +1975,7 @@ namespace ExodusIO {
 
                 // Gather across all nodes
                 std::vector<size_t> gatheredIndices[ranks];
-                std::vector<real_t> gatheredValues[ranks];
+                std::vector<double> gatheredValues[ranks];
                 if (rank == 0) {
                     // Collect everyone elses results
                     for (int i = 0; i < ranks; i++) {
@@ -1987,9 +1987,9 @@ namespace ExodusIO {
                             continue;
                         }
                         gatheredIndices[i].resize(sz);
-                        gatheredValues[i].resize(sz);
+                        gatheredValues[i].resize(sz);   
                         MPI_Recv(&gatheredIndices[i][0], sz, MPI_UNSIGNED_LONG_LONG, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                        MPI_Recv(&gatheredValues[i][0], sz, sizeof(real_t) == 8 ? MPI_DOUBLE : MPI_FLOAT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        MPI_Recv(&gatheredValues[i][0], sz, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                         if (verbose) std::cout << "Process #0 received " << sz << " values from Process #" << i << std::endl;
                     }
                 } else {
@@ -1998,7 +1998,7 @@ namespace ExodusIO {
                     MPI_Send(&sz, 1, MPI_UNSIGNED_LONG_LONG, 0, 0, MPI_COMM_WORLD);
                     if (sz != 0) {
                         MPI_Send(&indices[0], sz, MPI_UNSIGNED_LONG_LONG, 0, 0, MPI_COMM_WORLD);
-                        MPI_Send(&values[0], sz, sizeof(real_t) == 8 ? MPI_DOUBLE : MPI_FLOAT, 0, 0, MPI_COMM_WORLD);
+                        MPI_Send(&values[0], sz, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
                     }
                 }
 
