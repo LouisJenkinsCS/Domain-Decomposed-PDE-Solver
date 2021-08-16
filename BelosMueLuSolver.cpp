@@ -73,7 +73,7 @@ void printMultiVector(const Teuchos::RCP<const Tpetra::MultiVector<>> X, std::of
 }
 
 // Solves for ax=b
-void belosSolver(const Teuchos::RCP<Tpetra::CrsMatrix<>> _A, const Teuchos::RCP<Tpetra::MultiVector<> > X, const Teuchos::RCP<const Tpetra::MultiVector<> > B, size_t numIterations, double tolerance) {
+void belosSolver(const Teuchos::RCP<Tpetra::CrsMatrix<>> _A, const Teuchos::RCP<Tpetra::MultiVector<> > X, const Teuchos::RCP<const Tpetra::MultiVector<> > B, size_t numIterations, double tolerance, ExodusIO::IO &io, bool verbose) {
     Teuchos::RCP<Tpetra::Operator<>> A = _A;
     Teuchos::RCP<Tpetra::Operator<>> _M;
     Teuchos::RCP<const Tpetra::Operator<>> M;
@@ -86,8 +86,9 @@ void belosSolver(const Teuchos::RCP<Tpetra::CrsMatrix<>> _A, const Teuchos::RCP<
     M = prec.getConst();
     
     // Set up the solver
+    size_t iterations = 0;
     auto solverOptions = Teuchos::rcp(new Teuchos::ParameterList());
-    solverOptions->set ("Maximum Iterations", (int) numIterations);
+    solverOptions->set ("Maximum Iterations", (int) 1);
     solverOptions->set ("Convergence Tolerance", tolerance);
     
     Belos::SolverFactory<double, Tpetra::MultiVector<>, Tpetra::Operator<>> factory;
@@ -97,22 +98,32 @@ void belosSolver(const Teuchos::RCP<Tpetra::CrsMatrix<>> _A, const Teuchos::RCP<
     problem->setRightPrec(M);
     problem->setProblem();
     solver->setProblem(problem);
-    Belos::ReturnType result = solver->solve();
+    Belos::ReturnType result;
+    // TODO: This will not work!
+    for (int i = 0; i < numIterations; i++) {
+        result = solver->solve();
+        io.writeSolution(X, i, verbose);
+        iterations++;
+        if (result == Belos::Converged) {
+            if (Tpetra::getDefaultComm()->getRank() == 0) {
+                std::cout << "The Belos solve took " << i << " iteration(s) to reach "
+                "a relative residual tolerance of " << solver->achievedTol() << "." << std::endl;
+            }
+            break;
+        } else if (solver->achievedTol() <= tolerance) {
+            if (Tpetra::getDefaultComm()->getRank() == 0) {
+                std::cout << "The Belos solve took " << iterations << " iteration(s), but did not converge. Achieved tolerance = "
+                        << solver->achievedTol() << "." << std::endl;
+            }
+            break;
+        }
+        solver->reset(Belos::ResetType::Problem);
+        solver->setProblem(problem);
+    }
     
-    // Ask the solver how many iterations the last solve() took.
-    const int numIters = solver->getNumIters();
-
-    const double tTolerance = solver->achievedTol();
-    if (result == Belos::Converged) {
-        if (Tpetra::getDefaultComm()->getRank() == 0) {
-            std::cout << "The Belos solve took " << numIters << " iteration(s) to reach "
-            "a relative residual tolerance of " << tTolerance << "." << std::endl;
-        }
-    } else {
-        if (Tpetra::getDefaultComm()->getRank() == 0) {
-            std::cout << "The Belos solve took " << numIters << " iteration(s), but did not converge. Achieved tolerance = "
-                    << tTolerance << "." << std::endl;
-        }
+    if (Tpetra::getDefaultComm()->getRank() == 0) {
+        std::cout << "The Belos solve took " << iterations << " iteration(s), but did not converge. Achieved tolerance = "
+                << solver->achievedTol() << "." << std::endl;
     }
 }
 
@@ -141,10 +152,10 @@ int main(int argc, char *argv[]) {
             if (rank == 0) std::cerr << "No input file was provided; use the '--input' parameter!" << std::endl;
             return EXIT_FAILURE;
         }
-        if (Teuchos::size(*comm) == 1) {
-            std::cerr << "Requires at least 2 MPI Processors for this Example!" << std::endl;
-            return EXIT_FAILURE;
-        }
+        // if (Teuchos::size(*comm) == 1) {
+        //     std::cerr << "Requires at least 2 MPI Processors for this Example!" << std::endl;
+        //     return EXIT_FAILURE;
+        // }
         ExodusIO::IO io;
         if (!io.open(inputFile, true)) {
             std::cerr << "Process #" << rank << ": Failed to open input Exodus file '" << inputFile << "'" << std::endl;
@@ -184,21 +195,19 @@ int main(int argc, char *argv[]) {
 
         srand(time(NULL));
         X->randomize();
-        if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
-        belosSolver(A, X, B, numIterations, tolerance);
+        if (rank == 0) {
+            if (!io.create(solution)) {
+                std::cerr << "Process #" << rank << ": Failed to create output file '" << solution << "'" << std::endl;
+            }
+            io.decompose(std::max(2, comm->getSize()), verbose);
+        }
+        belosSolver(A, X, B, numIterations, tolerance, io, verbose);
         // TODO: Investigate the issues where X holds values outside of maximum boundary conditions
         // TODO: Investigate printing out values via time step variables using:
         // int ex_put_nodal_var (int exoid, int time_step, int nodal_var_index, int num_nodes, void *nodal_var_vals)
         if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
         output << "[Solution: X]" << std::endl;
         printMultiVector(X, output);
-        if (rank == 0) {
-            if (!io.create(solution)) {
-                std::cerr << "Process #" << rank << ": Failed to create output file '" << solution << "'" << std::endl;
-            }
-            io.decompose(comm->getSize(), verbose);
-        }
-        io.writeSolution(X, 1, verbose);
     }
 
     return 0;
