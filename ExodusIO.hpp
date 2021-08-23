@@ -27,15 +27,16 @@
 /*
     Developer Notes:
 
-    - Tpetra::Map::createOneToOne cannot be used to construct the ghosted vertices as it will utilize a new
+    - This file contains the core logic required to assemble matrices from an Exodus-II mesh file, as well as to decompose
+      and visualize the decomposition. Users should invoke `open` to open the Exodus-II mesh file to read in, and should
+      invoke `create` to open the Exodus-II mesh file to write out. `assemble` constructs the PDE for the steady-state heat
+      equation, while `getMatrix` constructs the raw Laplacian matrix which includes all degree-of-freedom and non-degree-of-freedom
+      nodes, and while is not necessarily useful on its own basis, can be rather useful when constructing a PDE based on sidesets,
+      such as ones revolving around pressure applied to faces of the mesh.
+    - Tpetra::Map::createOneToOne cannot be used to handle ghosted vertices when using ParMETIS as it will utilize a new
       `directoryMap_` that is distributed contiguous and uniform, and uses it's `remoteIndexList` to redistribute
       the vertices in a way that does not respect the original map. This discards the work performed by ParMETIS to
       partition the mesh, and so we instead distribute the ghost vertices in our own way.
-    - The output decomposed mesh has some issues with more complex meshes that needs to be sorted out, in particular see
-      issue #1. The mesh should be decomposed first if possible to see if there are any issues, but the issues appear to be
-      isolated to just writing out the mesh than reading in the mesh.
-    - The process has been manually verified on the smallest and simplest mesh, data/rectangle-tris.exo, but is very likely to
-      work on other larger meshes.
     - For extremely large meshes, decomposing the Exodus file into multiple files (`decomp`) will likely be necessary since the
       Exodus API reads in O(N) data entirely into memory very often, where N is the number of nodes. The current code base would
       require some rather significant tweaking and rewriting as right now there is an assumption that each process is reading the
@@ -48,20 +49,37 @@
     
     METIS:
     
-    TODO: Description
+    - METIS is a library that performs sequential partitioning of a graph or a mesh. Unlike its cousin, ParMETIS, it has some
+      unique properties and additional functionality due to the entire mesh or graph being allocated on a single node. For example,
+      METIS can return a partitioning scheme for the nodes as well as elements when partitioning a mesh. Otherwise, it is very much
+      similar to ParMETIS. Please consort the METIS manual for more information.
 
 
     ParMETIS:
     
-    TODO: Description
+    - ParMETIS is a library that performs parallel partitioning of a graph or a mesh. It is a parallel version of METIS, and has some
+      limitations compared to METIS, such as only providing the partitioning scheme of elements and not nodes, as well as having less
+      functionality. The Distributed CSR format enforces either a relabeling of vertices or requires starting with a naive distribution,
+      as processes must hold contiguous ranges of vertices, and it can be no less complex than that. Please consort the ParMETIS manual
+      for more information.
 
     ExodusII:
 
-    TODO: Description
+    - The SEACAS Exodus II library is a C interface to the Exodus II mesh file format. It is a low-level tool for interfacing with
+      Exodus-II mesh files. There are some nuances and rules that must be strictly followed, such as ensuring that the declared
+      length of the scalar type or index types (4 byte or 8 byte) must match what is passed to certain functions, and is at times
+      inconsistent (i.e. in the case of the indices). The librar is not type-safe, and so it is strongly recommended that one adheres
+      to the Exodus-II manual and Doxygen-generated documentation that can be found online.
 */
 
 namespace ExodusIO {
 
+    /*
+        A distributed object (i.e. all processes should call these functions), as it is stateful and holds process-specific and cached
+        information. Invoke `open` to read in an Exodus-II mesh, `create` to write out an Exodus-II mesh, and `assemble` to assemble
+        the Steady-State Heat Equation for the mesh; `writeSolution` to write out results of the Steady-State Heat Equation, and finally
+        `decompose` to write out the solution and partitioned mesh to the output Exodus-II mesh file specified in `create`.
+    */
     class IO {
         public:
             IO() {}
