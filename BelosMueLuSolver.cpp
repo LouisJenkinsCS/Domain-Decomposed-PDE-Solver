@@ -17,6 +17,13 @@
     in a well-conditioned function, a slight change in the input will result in a slight change in the output;
     in a poorly-conditioned function, a slight change in the input will result in a _substantial_ change in the output.
     Hence the need to condition the matrix, since the goal is to reach convergence (i.e. think gradient descent).
+
+    Developer Note: An explicit `printMultiVector` and `printCrsMatrix` exists as the `describe` function only prints out
+    values at rank 0, and so that the combined matrix can be seen in the proper order. MPI processes, even if they flush and
+    use barriers, can result in reordering of the output that may result in non-sensical output or even improperly interleaved
+    output. To remedy this, each MPI process outputs the data structures along side the timestamp that each process has output
+    the given row/column. Barriers are used to ensure that the timestamps reflect the desired ordering, and gets reordered via
+    `mpi_output_combiner.py`.
 */
 
 uint64_t getTime() {
@@ -25,6 +32,8 @@ uint64_t getTime() {
     return tv.tv_sec * 1000000ULL + tv.tv_usec;
 }
 
+// Prints out a CrsMatrix; each process goes row-by-row and prints out
+// its row values to the `output` stream. The output should be coalesced via `mpi_output_combiner.py`
 void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, std::ofstream &output, bool sparse=true) {
     auto rank = Tpetra::getDefaultComm()->getRank();
     auto ranks = Tpetra::getDefaultComm()->getSize();
@@ -52,6 +61,8 @@ void printCrsMatrix(const Teuchos::RCP<const Tpetra::CrsMatrix<>> matrix, std::o
     }
 }
 
+// Prints out a multi-vector with a single column; each process goes row-by-row and prints out
+// its value to the `output` stream. The output should be coalesced via `mpi_output_combiner.py`
 void printMultiVector(const Teuchos::RCP<const Tpetra::MultiVector<>> X, std::ofstream &output) {
     auto rank = Tpetra::getDefaultComm()->getRank();
     auto ranks = Tpetra::getDefaultComm()->getSize();
@@ -152,10 +163,6 @@ int main(int argc, char *argv[]) {
             if (rank == 0) std::cerr << "No input file was provided; use the '--input' parameter!" << std::endl;
             return EXIT_FAILURE;
         }
-        // if (Teuchos::size(*comm) == 1) {
-        //     std::cerr << "Requires at least 2 MPI Processors for this Example!" << std::endl;
-        //     return EXIT_FAILURE;
-        // }
         ExodusIO::IO io;
         if (!io.open(inputFile, true)) {
             std::cerr << "Process #" << rank << ": Failed to open input Exodus file '" << inputFile << "'" << std::endl;
@@ -202,9 +209,6 @@ int main(int argc, char *argv[]) {
             io.decompose(std::max(2, comm->getSize()), verbose);
         }
         belosSolver(A, X, B, numIterations, tolerance, io, verbose);
-        // TODO: Investigate the issues where X holds values outside of maximum boundary conditions
-        // TODO: Investigate printing out values via time step variables using:
-        // int ex_put_nodal_var (int exoid, int time_step, int nodal_var_index, int num_nodes, void *nodal_var_vals)
         if (rank == 0) std::cout << "Printing out multivector X" << std::endl;
         output << "[Solution: X]" << std::endl;
         printMultiVector(X, output);

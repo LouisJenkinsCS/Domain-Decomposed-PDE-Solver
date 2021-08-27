@@ -1,5 +1,10 @@
 #!/usr/local/bin/bash
 
+# Note: To specify your current installation of Trilinos and ParMETIS, you should provide the environment variables
+# TRILINOS_INCLUDE and TRILINOS_LIBRARY or TRILINOS_DIR which infers the other two from this prefix; also needed is
+# ParMETIS_INCLUDE and ParMETIS_LIBRARY or ParMETIS_DIR which infers the other two from this prefix.
+# Note that there is no way to detect the path of a package loaded by spack, or at least not to the author's knowledge.
+
 export COLOR_NC='\e[0m' # No Color
 export COLOR_BLACK='\e[0;30m'
 export COLOR_GRAY='\e[1;30m'
@@ -43,17 +48,40 @@ findPath () {
 }
 
 # Parameters
-findPath "parmetis"
-findPath "trilinos"
-findPath "netcdf-c"
-findPath "exodusii"
-findPath "metis"
+if [[ -z "${PARMETIS_INCLUDE}" || -z "${PARMETIS_LIB}" ]]; then
+    if [[ -z "${PARMETIS_DIR}" ]]; then
+        findPath "parmetis"
+    else
+        PARMETIS_INCLUDE=${PARMETIS_DIR}/include/
+        PARMETIS_LIB=${PARMETIS_DIR}/lib/
+    fi
+fi
+echo "Found ParMETIS PATHs:"
+success "Include='$PARMETIS_INCLUDE'"
+success "Lib='$PARMETIS_LIB'"
+
+if [[ -z "${TRILINOS_INCLUDE}" || -z "${TRILINOS_LIB}" ]]; then
+    if [[ -z "${TRILINOS_DIR}" ]]; then
+        findPath "trilinos"
+    else
+        TRILINOS_INCLUDE=${TRILINOS_DIR}/include/
+        TRILINOS_LIB=${TRILINOS_DIR}/lib/
+    fi
+fi
+echo "Found Trilinos PATHs:"
+success "Include='$TRILINOS_INCLUDE'"
+success "Lib='$TRILINOS_LIB'"
+
 PARMETIS_LDFLAGS="-lparmetis"
 TRILINOS_LDFLAGS="-ltpetra -ltpetraext -ltpetrainout -lkokkoscore -lkokkosalgorithms -lteuchoscore -lteuchoscomm -lteuchosparameterlist -lzoltan2 -lxpetra -lxpetra-sup -lgaleri-xpetra -lgaleri-epetra -ltpetraclassiclinalg -ltpetraclassiclinalg -lzoltan -lteuchoskokkoscomm -lteuchoskokkoscompat -lteuchosnumerics -lmetis -lmuelu -lbelos -lbelostpetra -lmuelu-adapters -lmuelu-interface -lifpack2"
 CCFLAGS="-std=c++17 -O0 -g -ggdb3 -fsanitize=address -Woverloaded-virtual"
 
 # Compile
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusIODecomposeTest.cpp -o exec/ExodusIODecomposeTest
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusMatrixTest.cpp -o exec/ExodusMatrixTest
-# mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusAssembleTest.cpp -o exec/ExodusAssembleTest
+# Decomposition of the mesh
+mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusIODecomposeTest.cpp -o exec/ExodusIODecomposeTest
+# Simple construction of a mesh
+mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusMatrixTest.cpp -o exec/ExodusMatrixTest
+# Construction of the matrices/vectors to solve the steady-state heat equation A X = B
+mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis ExodusAssembleTest.cpp -o exec/ExodusAssembleTest
+# Construction of the matrices/vectors to solve the steady-state heat equation A X = B and then solving it
 mpic++ -I$TRILINOS_INCLUDE -L$TRILINOS_LIB $TRILINOS_LDFLAGS -L$PARMETIS_LIB -I$PARMETIS_INCLUDE $CCFLAGS -lexodus -lparmetis BelosMueLuSolver.cpp -o exec/BelosMueLuSolver
