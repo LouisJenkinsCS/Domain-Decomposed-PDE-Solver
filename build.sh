@@ -1,4 +1,4 @@
-#!/usr/local/bin/bash
+#!/usr/bin/env bash
 
 # Note: To specify your current installation of Trilinos and ParMETIS, you should provide the environment variables
 # TRILINOS_INCLUDE and TRILINOS_LIBRARY or TRILINOS_DIR which infers the other two from this prefix; also needed is

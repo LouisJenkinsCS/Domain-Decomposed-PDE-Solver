@@ -696,8 +696,10 @@ namespace ExodusIO {
                     // Receive all users mappings
                     for (int i = 1; i < ranks; i++) {
                         std::vector<std::pair<global_t, global_t>> otherGlobalMappings;
-                        size_t sz = 0;
-                        MPI_Recv(&sz, 1, MPI_UNSIGNED_LONG_LONG, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        int sz = 0;
+                        MPI_Status status;
+                        MPI_Probe(i, 0, MPI_COMM_WORLD, &status);
+                        MPI_Get_count(&status, MPI_UNSIGNED_LONG, &sz);
                         otherGlobalMappings.resize(sz);
                         MPI_Recv(&otherGlobalMappings[0], sizeof(std::pair<global_t, global_t>) * sz, MPI_BYTE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                         for (auto &mapping : otherGlobalMappings) {
@@ -714,7 +716,6 @@ namespace ExodusIO {
                     }
                     // Send size and then mappings
                     size_t sz = ourGlobalMappings.size();
-                    MPI_Send(&sz, 1, MPI_UNSIGNED_LONG_LONG, 0, 0, MPI_COMM_WORLD);
                     MPI_Send(&ourGlobalMappings[0], sizeof(std::pair<global_t, global_t>) * sz, MPI_BYTE, 0, 0, MPI_COMM_WORLD);
                 }
                 
@@ -1360,6 +1361,9 @@ namespace ExodusIO {
                         for (int i = 0; i < ranks; i++) {
                             if (rank == i) continue;
                             int sz = 0;
+                            MPI_Status status;
+                            MPI_Probe(i, 0, MPI_COMM_WORLD, &status);
+                            MPI_Get_count(&status, MPI_INT, &sz);
                             MPI_Recv(&sz, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                             std::vector<idx_t> recv(sz);
                             MPI_Recv(recv.data(), sz, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -1373,7 +1377,6 @@ namespace ExodusIO {
                         }
                     } else {
                         int sz = nodeIndices.size();
-                        MPI_Send(&sz, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
                         MPI_Send(nodeIndices.data(), sz, MPI_INT, 0, 0, MPI_COMM_WORLD);
                     }
                 }

@@ -1,7 +1,5 @@
 # Mesh PDE Solver
 
-**TODO:** Under Construction
-
 Performs domain decomposition (partitioning of the mesh across multiple processes) via ParMETIS/METIS/Zoltan2,
 assembles matrices required to solve some partial differential equation (PDE), and writes out the solution to
 the original mesh, which is in Exodus-II Format. Currently only solves the Steady-State Heat Equation, assembling
